@@ -1,0 +1,49 @@
+openapi: 3.1.0
+info:
+  title: gh-pr notifications schema
+  version: 0.1.0
+paths: {}
+components:
+  schemas:
+    NotificationEvent:
+      type: object
+      required: [id, repository, subject, target]
+      properties:
+        id:
+          type: string
+        repository:
+          $ref: '#/components/schemas/RepositoryRef'
+        subject:
+          $ref: '#/components/schemas/NotificationSubject'
+        target:
+          $ref: '#/components/schemas/NotificationTarget'
+    RepositoryRef:
+      type: object
+      required: [owner, repo]
+      properties:
+        owner:
+          type: string
+        repo:
+          type: string
+    NotificationSubject:
+      type: object
+      required: [type, title, url]
+      properties:
+        type:
+          type: string
+        title:
+          type: string
+        url:
+          type: string
+          format: uri
+    NotificationTarget:
+      type: object
+      required: [kind, number, ref]
+      properties:
+        kind:
+          type: string
+          enum: [pr, issue]
+        number:
+          type: integer
+        ref:
+          type: string

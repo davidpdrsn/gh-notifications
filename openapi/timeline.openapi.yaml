@@ -1,0 +1,109 @@
+openapi: 3.1.0
+info:
+  title: gh-pr timeline schema
+  version: 0.1.0
+paths: {}
+components:
+  schemas:
+    TimelineResponse:
+      type: object
+      required: [repository, pull_number, events]
+      properties:
+        repository:
+          $ref: '#/components/schemas/RepositoryRef'
+        pull_number:
+          type: integer
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/Event'
+    RepositoryRef:
+      type: object
+      required: [owner, repo]
+      properties:
+        owner:
+          type: string
+        repo:
+          type: string
+    Event:
+      type: object
+      required: [type, occurred_at, id]
+      properties:
+        type:
+          type: string
+        occurred_at:
+          type: string
+          format: date-time
+        id:
+          type: string
+        actor:
+          $ref: '#/components/schemas/Actor'
+        event:
+          type: string
+        pr:
+          $ref: '#/components/schemas/PROpenedData'
+        issue:
+          $ref: '#/components/schemas/IssueOpenedData'
+        comment:
+          $ref: '#/components/schemas/CommentContext'
+        commit:
+          $ref: '#/components/schemas/CommitContext'
+        diff_url:
+          type: string
+          format: uri
+    Actor:
+      type: object
+      required: [login, id]
+      properties:
+        login:
+          type: string
+        id:
+          type: integer
+    PROpenedData:
+      type: object
+      required: [title, body]
+      properties:
+        title:
+          type: string
+        body:
+          type: string
+    IssueOpenedData:
+      type: object
+      required: [title, body]
+      properties:
+        title:
+          type: string
+        body:
+          type: string
+    CommentContext:
+      type: object
+      properties:
+        path:
+          type: string
+        body:
+          type: string
+        diff_hunk:
+          type: string
+        position:
+          type: integer
+        original_position:
+          type: integer
+        line:
+          type: integer
+        start_line:
+          type: integer
+        review_id:
+          type: integer
+        thread_id:
+          type: string
+        url:
+          type: string
+          format: uri
+    CommitContext:
+      type: object
+      properties:
+        sha:
+          type: string
+        url:
+          type: string
+          format: uri

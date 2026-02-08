@@ -1,0 +1,33 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  settings:
+    goimports:
+      local-prefixes: gh-pr
+    exhaustruct:
+      include:
+        - '^gh-pr/internal/cli\.AppError$'
+        - '^gh-pr/internal/github\.User$'
+        - '^gh-pr/internal/github\.ReviewComment$'
+      allow-empty: true
+      allow-empty-returns: true
+      allow-empty-declarations: true
+  disable-all: true
+  enable:
+    - errcheck
+    - exhaustruct
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+
+issues:
+  exclude-use-default: false

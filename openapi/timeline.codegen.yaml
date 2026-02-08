@@ -1,0 +1,6 @@
+package: timelineapi
+generate:
+  models: true
+output-options:
+  skip-prune: true
+output: internal/timelineapi/types.gen.go

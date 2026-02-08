@@ -1,0 +1,6 @@
+package: notificationsapi
+generate:
+  models: true
+output-options:
+  skip-prune: true
+output: internal/notificationsapi/types.gen.go
