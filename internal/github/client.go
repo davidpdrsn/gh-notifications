@@ -57,6 +57,7 @@ type NotificationSubject struct {
 
 type Notification struct {
 	ID         string                 `json:"id"`
+	UpdatedAt  time.Time              `json:"updated_at"`
 	Repository NotificationRepository `json:"repository"`
 	Subject    NotificationSubject    `json:"subject"`
 }

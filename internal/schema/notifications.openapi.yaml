@@ -7,10 +7,13 @@ components:
   schemas:
     NotificationEvent:
       type: object
-      required: [id, repository, subject, target]
+      required: [id, updated_at, repository, subject, target]
       properties:
         id:
           type: string
+        updated_at:
+          type: string
+          format: date-time
         repository:
           $ref: '#/components/schemas/RepositoryRef'
         subject:

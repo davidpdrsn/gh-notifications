@@ -67,6 +67,7 @@ type NotificationTarget struct {
 
 type NotificationEvent struct {
 	ID         string                 `json:"id"`
+	UpdatedAt  time.Time              `json:"updated_at"`
 	Repository NotificationRepository `json:"repository"`
 	Subject    NotificationSubject    `json:"subject"`
 	Target     NotificationTarget     `json:"target"`

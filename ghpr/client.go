@@ -167,7 +167,8 @@ func fromTimelineAPIEvent(e timelineapi.Event) TimelineEvent {
 
 func fromNotificationsAPIEvent(e notificationsapi.NotificationEvent) NotificationEvent {
 	return NotificationEvent{
-		ID: e.Id,
+		ID:        e.Id,
+		UpdatedAt: e.UpdatedAt,
 		Repository: NotificationRepository{
 			Owner: e.Repository.Owner,
 			Repo:  e.Repository.Repo,

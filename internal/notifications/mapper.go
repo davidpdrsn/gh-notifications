@@ -21,7 +21,8 @@ func MapNotification(n github.Notification) (notificationsapi.NotificationEvent,
 	}
 
 	return notificationsapi.NotificationEvent{
-		Id: n.ID,
+		Id:        n.ID,
+		UpdatedAt: n.UpdatedAt,
 		Repository: notificationsapi.RepositoryRef{
 			Owner: owner,
 			Repo:  repo,

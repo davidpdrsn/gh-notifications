@@ -9,6 +9,7 @@ This file documents working conventions for humans and coding agents in this rep
 - Main command surface:
   - `gh-pr timeline <owner>/<repo>#<number>`
   - `gh-pr notifications`
+  - `gh-pr tui`
   - `gh-pr timeline --schema`
   - `gh-pr notifications --schema`
 
@@ -34,6 +35,7 @@ This file documents working conventions for humans and coding agents in this rep
   - Resolution order: `GITHUB_TOKEN` -> `GH_TOKEN` -> `gh auth token`
 - Event mapping and normalization: `internal/timeline/mapper.go`
 - Notification mapping and normalization: `internal/notifications/mapper.go`
+- TUI state/reducer model: `internal/tui/state.go`, `internal/tui/reducer.go`
 - Event sorting: `internal/timeline/sort.go`
 - Embedded OpenAPI schema: `internal/schema/timeline.openapi.yaml`
 - Public OpenAPI schema source: `openapi/timeline.openapi.yaml`
@@ -69,8 +71,21 @@ When changing timeline payload fields:
 
 ## Testing Expectations
 
+- Start feature work by writing or updating tests first (state-transition tests for TUI logic, unit tests elsewhere).
 - Run `go test ./...` after functional or schema/model changes.
+- Always run tests after making changes, even for refactors.
 - Keep mapper tests focused on deterministic IDs and stable grouping behavior.
+- For non-trivial TUI update-loop changes, include at least one integration-style test that runs the full Bubble Tea program/model loop (not reducer-only tests) to validate runtime message/command behavior.
+
+## TUI Architecture Contract
+
+- Keep a single source-of-truth app state for the TUI.
+- User input and GitHub stream updates must be represented as events.
+- Apply events through a pure reducer that returns next state plus effects.
+- Keep network/async work in effect runners, never inside reducer/view code.
+- Keep exactly one in-flight async wait command in Bubble Tea update loop:
+  - Key/window input messages must not spawn new async waiters.
+  - Async loader messages should re-arm the waiter (for continuous streaming without waiter fan-out).
 
 ## Notes
 

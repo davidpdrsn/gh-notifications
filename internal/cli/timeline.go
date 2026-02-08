@@ -16,6 +16,7 @@ import (
 	"gh-pr/internal/schema"
 	"gh-pr/internal/timeline"
 	"gh-pr/internal/timelineapi"
+	"gh-pr/internal/tui"
 
 	"github.com/spf13/cobra"
 )
@@ -35,6 +36,7 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	root.SetErr(stderr)
 	root.AddCommand(app.timelineCommand(ctx))
 	root.AddCommand(app.notificationsCommand(ctx))
+	root.AddCommand(app.tuiCommand(ctx))
 	root.SetArgs(args)
 
 	if err := root.Execute(); err != nil {
@@ -320,6 +322,32 @@ func (a *app) notificationsCommand(ctx context.Context) *cobra.Command {
 	}
 
 	cmd.Flags().BoolVar(&printSchema, "schema", false, "print command schema as OpenAPI JSON")
+	return cmd
+}
+
+func (a *app) tuiCommand(ctx context.Context) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "tui",
+		Short: "Browse notifications and timelines interactively",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) != 0 {
+				usage := cmd.UsageString()
+				return &AppError{Code: "parse_error", Message: "tui does not accept positional arguments\n\n" + strings.TrimSpace(usage), ExitCode: ExitParse, Details: nil, Cause: nil}
+			}
+
+			resolver := github.NewTokenResolver()
+			token, err := resolver.Resolve(ctx)
+			if err != nil {
+				return &AppError{Code: "auth_error", Message: "failed to resolve GitHub auth token", ExitCode: ExitAuth, Details: nil, Cause: err}
+			}
+
+			if err := tui.Run(ctx, token, a.stdout); err != nil {
+				return &AppError{Code: "internal_error", Message: "failed to run tui", ExitCode: ExitInternal, Details: nil, Cause: err}
+			}
+			return nil
+		},
+	}
+
 	return cmd
 }
 
