@@ -192,6 +192,9 @@ func (a *app) streamTimelineWithReviewComments(ctx context.Context, client *gith
 				warningsCh <- warning
 			}
 			if ok {
+				if timeline.ShouldIgnorePRTimelineEvent(event) {
+					return nil
+				}
 				eventsCh <- event
 			}
 			return nil

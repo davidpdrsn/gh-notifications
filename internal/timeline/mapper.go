@@ -27,6 +27,15 @@ var knownTimelineEvents = map[string]struct{}{
 	"review_dismissed": {}, "connected": {}, "disconnected": {}, "transferred": {},
 }
 
+var ignoredPRTimelineEvents = map[string]struct{}{
+	"cross-referenced":    {},
+	"head_ref_deleted":    {},
+	"labeled":             {},
+	"mentioned":           {},
+	"subscribed":          {},
+	"auto_squash_enabled": {},
+}
+
 func Build(pr github.PullRequest, rawItems []github.TimelineItem) ([]timelineapi.Event, []string) {
 	return BuildWithComments(pr, rawItems, nil)
 }
@@ -43,6 +52,9 @@ func BuildWithComments(pr github.PullRequest, rawItems []github.TimelineItem, re
 			warnings = append(warnings, warning)
 		}
 		if ok {
+			if ShouldIgnorePRTimelineEvent(mapped) {
+				continue
+			}
 			events = append(events, mapped)
 		}
 	}
@@ -103,6 +115,9 @@ func MapTimelineItem(raw json.RawMessage) (timelineapi.Event, string, bool) {
 	}
 
 	eventID := firstNonEmpty(asString(obj["id"]), asString(obj["node_id"]))
+	if eventName == "head_ref_force_pushed" {
+		eventID = firstNonEmpty(asString(obj["node_id"]), asString(obj["id"]))
+	}
 	if eventID == "" {
 		eventID = "ghf_" + stableHash("timeline", eventName, canonicalizeRawJSON(raw))
 	}
@@ -116,14 +131,21 @@ func MapTimelineItem(raw json.RawMessage) (timelineapi.Event, string, bool) {
 
 	if eventName == "committed" {
 		sha := firstNonEmpty(asString(obj["sha"]), asString(obj["commit_id"]))
-		url := firstNonEmpty(asString(obj["html_url"]), asString(obj["url"]), asString(obj["commit_url"]))
-		diffURL := commitDiffURL(url)
+		htmlURL := firstNonEmpty(asString(obj["html_url"]), asString(obj["url"]))
+		apiURL := asString(obj["commit_url"])
+		url := firstNonEmpty(htmlURL, apiURL)
+		diffURL := commitDiffURL(firstNonEmpty(apiURL, url))
 		mapped.Commit = &timelineapi.CommitContext{Sha: ptrString(sha), Url: ptrString(url)}
 		mapped.DiffUrl = ptrString(diffURL)
 	}
 
 	if eventName == "commented" || eventName == "line-commented" {
 		mapped.Comment = mapTimelineCommentContext(obj)
+	}
+	if eventName == "review_requested" {
+		if requested := reviewRequestedTarget(obj); requested != "" {
+			mapped.Comment = &timelineapi.CommentContext{Body: ptrString(requested)}
+		}
 	}
 
 	if actor := extractActor(obj); actor != nil {
@@ -187,6 +209,14 @@ func MapReviewComment(comment github.ReviewComment) timelineapi.Event {
 	}
 
 	return e
+}
+
+func ShouldIgnorePRTimelineEvent(event timelineapi.Event) bool {
+	if event.Event == nil {
+		return false
+	}
+	_, ok := ignoredPRTimelineEvents[*event.Event]
+	return ok
 }
 
 func reviewCommentThreadID(comment github.ReviewComment) string {
@@ -261,6 +291,25 @@ func occurredAt(obj map[string]any) time.Time {
 			return t.UTC()
 		}
 	}
+
+	if author, ok := obj["author"].(map[string]any); ok {
+		if raw, _ := author["date"].(string); raw != "" {
+			if t, err := time.Parse(time.RFC3339, raw); err == nil {
+				return t.UTC()
+			}
+		}
+	}
+
+	if commit, ok := obj["commit"].(map[string]any); ok {
+		if author, ok := commit["author"].(map[string]any); ok {
+			if raw, _ := author["date"].(string); raw != "" {
+				if t, err := time.Parse(time.RFC3339, raw); err == nil {
+					return t.UTC()
+				}
+			}
+		}
+	}
+
 	return time.Unix(0, 0).UTC()
 }
 
@@ -310,12 +359,20 @@ func commitDiffURL(url string) string {
 		return ""
 	}
 	if strings.Contains(url, "api.github.com/repos/") && strings.Contains(url, "/commits/") {
-		u := strings.Replace(url, "https://api.github.com/repos/", "https://github.com/", 1)
-		u = strings.Replace(u, "/commits/", "/commit/", 1)
-		return u + ".diff"
+		return url
 	}
 	if strings.Contains(url, "github.com/") && strings.Contains(url, "/commit/") {
-		return url + ".diff"
+		u := strings.TrimPrefix(url, "https://github.com/")
+		u = strings.TrimPrefix(u, "http://github.com/")
+		u = strings.TrimSuffix(u, ".diff")
+		parts := strings.Split(u, "/")
+		if len(parts) >= 4 && parts[2] == "commit" {
+			owner, repo, sha := parts[0], parts[1], parts[3]
+			if owner != "" && repo != "" && sha != "" {
+				return "https://api.github.com/repos/" + owner + "/" + repo + "/commits/" + sha
+			}
+		}
+		return url
 	}
 	return url
 }
@@ -417,6 +474,26 @@ func mapTimelineCommentContext(obj map[string]any) *timelineapi.CommentContext {
 	}
 
 	return ctx
+}
+
+func reviewRequestedTarget(obj map[string]any) string {
+	if requestedReviewer, ok := obj["requested_reviewer"].(map[string]any); ok {
+		login := asString(requestedReviewer["login"])
+		if login != "" {
+			return "@" + login
+		}
+	}
+	if requestedTeam, ok := obj["requested_team"].(map[string]any); ok {
+		slug := asString(requestedTeam["slug"])
+		if slug != "" {
+			return "@" + slug
+		}
+		name := asString(requestedTeam["name"])
+		if name != "" {
+			return name
+		}
+	}
+	return ""
 }
 
 func optionalString(s string) *string {

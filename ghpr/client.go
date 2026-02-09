@@ -109,6 +109,27 @@ func NotificationsSchemaJSON() ([]byte, error) {
 	return schema.NotificationsOpenAPIJSON()
 }
 
+func (c *Client) FetchCommitDiff(ctx context.Context, diffURL string) (string, error) {
+	return c.github.FetchCommitDiff(ctx, diffURL)
+}
+
+func (c *Client) FetchForcePushInterdiff(ctx context.Context, ref string, eventID string) (ForcePushInterdiff, error) {
+	parsed, err := ParseTimelineRef(ref)
+	if err != nil {
+		return ForcePushInterdiff{}, err
+	}
+	interdiff, err := c.github.FetchForcePushInterdiff(ctx, parsed.Owner, parsed.Repo, parsed.Number, eventID)
+	if err != nil {
+		return ForcePushInterdiff{}, err
+	}
+	return ForcePushInterdiff{
+		BeforeSHA:  interdiff.BeforeSHA,
+		AfterSHA:   interdiff.AfterSHA,
+		CompareURL: interdiff.CompareURL,
+		Diff:       interdiff.Diff,
+	}, nil
+}
+
 func (c *Client) streamPRTimeline(ctx context.Context, owner, repo string, number int, emit func(timelineapi.Event) error, onWarning func(string)) error {
 	if err := c.github.StreamTimeline(ctx, owner, repo, number, func(item github.TimelineItem) error {
 		e, warning, ok := timeline.MapTimelineItem(item.Raw)
@@ -116,6 +137,9 @@ func (c *Client) streamPRTimeline(ctx context.Context, owner, repo string, numbe
 			onWarning(warning)
 		}
 		if ok {
+			if timeline.ShouldIgnorePRTimelineEvent(e) {
+				return nil
+			}
 			return emit(e)
 		}
 		return nil

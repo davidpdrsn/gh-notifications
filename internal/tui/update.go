@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 
 	"gh-pr/ghpr"
 
@@ -43,6 +44,40 @@ type timelineErrMsg struct {
 	err error
 }
 
+type commitDiffLoadedMsg struct {
+	ref     string
+	eventID string
+	diff    string
+}
+
+type commitDiffErrMsg struct {
+	ref     string
+	eventID string
+	err     error
+}
+
+type forcePushInterdiffLoadedMsg struct {
+	ref        string
+	eventID    string
+	beforeSHA  string
+	afterSHA   string
+	compareURL string
+	diff       string
+}
+
+type forcePushInterdiffErrMsg struct {
+	ref     string
+	eventID string
+	err     error
+}
+
+type clipboardCopiedMsg struct{ column string }
+
+type clipboardErrMsg struct {
+	column string
+	err    error
+}
+
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	events := make([]Event, 0, 1)
 	asyncMsg := false
@@ -50,6 +85,15 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch t := msg.(type) {
 	case tea.WindowSizeMsg:
 		events = append(events, WindowSizeEvent{Width: t.Width, Height: t.Height})
+	case tea.MouseMsg:
+		switch {
+		case t.Button == tea.MouseButtonWheelUp:
+			events = append(events, MouseWheelEvent{X: t.X, Y: t.Y, Delta: -1})
+		case t.Button == tea.MouseButtonWheelDown:
+			events = append(events, MouseWheelEvent{X: t.X, Y: t.Y, Delta: 1})
+		case t.Action == tea.MouseActionPress && t.Button == tea.MouseButtonLeft:
+			events = append(events, MouseClickEvent{X: t.X, Y: t.Y, Button: mouseButtonLeft})
+		}
 	case tea.KeyMsg:
 		events = append(events, KeyEvent{Key: t.String()})
 	case notifArrivedMsg:
@@ -73,6 +117,24 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case timelineErrMsg:
 		asyncMsg = true
 		events = append(events, TimelineErrEvent{Generation: t.gen, Ref: t.ref, Err: t.err.Error()})
+	case commitDiffLoadedMsg:
+		asyncMsg = true
+		events = append(events, CommitDiffLoadedEvent{Ref: t.ref, EventID: t.eventID, Diff: t.diff})
+	case commitDiffErrMsg:
+		asyncMsg = true
+		events = append(events, CommitDiffErrEvent{Ref: t.ref, EventID: t.eventID, Err: t.err.Error()})
+	case forcePushInterdiffLoadedMsg:
+		asyncMsg = true
+		events = append(events, ForcePushInterdiffLoadedEvent{Ref: t.ref, EventID: t.eventID, BeforeSHA: t.beforeSHA, AfterSHA: t.afterSHA, CompareURL: t.compareURL, Diff: t.diff})
+	case forcePushInterdiffErrMsg:
+		asyncMsg = true
+		events = append(events, ForcePushInterdiffErrEvent{Ref: t.ref, EventID: t.eventID, Err: t.err.Error()})
+	case clipboardCopiedMsg:
+		asyncMsg = true
+		events = append(events, ClipboardCopiedEvent{Column: t.column})
+	case clipboardErrMsg:
+		asyncMsg = true
+		events = append(events, ClipboardCopyFailedEvent{Column: t.column, Err: t.err.Error()})
 	}
 
 	for _, ev := range events {
@@ -109,8 +171,54 @@ func (m *model) applyEffects(effects []Effect) {
 			ctx, cancel := context.WithCancel(m.ctx)
 			m.timelineCancel = cancel
 			m.startTimelineLoader(ctx, e.Generation, e.Ref)
+		case StartCommitDiffEffect:
+			m.startCommitDiffLoader(e.Ref, e.EventID, e.DiffURL)
+		case StartForcePushInterdiffEffect:
+			m.startForcePushInterdiffLoader(e.Ref, e.EventID)
+		case CopyColumnEffect:
+			m.startClipboardCopy(e.Column, e.Text)
 		}
 	}
+}
+
+func (m *model) startCommitDiffLoader(ref, eventID, diffURL string) {
+	go func() {
+		if m.client == nil {
+			m.msgCh <- commitDiffErrMsg{ref: ref, eventID: eventID, err: errors.New("client unavailable")}
+			return
+		}
+		diff, err := m.client.FetchCommitDiff(m.ctx, diffURL)
+		if err != nil {
+			m.msgCh <- commitDiffErrMsg{ref: ref, eventID: eventID, err: err}
+			return
+		}
+		m.msgCh <- commitDiffLoadedMsg{ref: ref, eventID: eventID, diff: diff}
+	}()
+}
+
+func (m *model) startForcePushInterdiffLoader(ref, eventID string) {
+	go func() {
+		if m.client == nil {
+			m.msgCh <- forcePushInterdiffErrMsg{ref: ref, eventID: eventID, err: errors.New("client unavailable")}
+			return
+		}
+		interdiff, err := m.client.FetchForcePushInterdiff(m.ctx, ref, eventID)
+		if err != nil {
+			m.msgCh <- forcePushInterdiffErrMsg{ref: ref, eventID: eventID, err: err}
+			return
+		}
+		m.msgCh <- forcePushInterdiffLoadedMsg{ref: ref, eventID: eventID, beforeSHA: interdiff.BeforeSHA, afterSHA: interdiff.AfterSHA, compareURL: interdiff.CompareURL, diff: interdiff.Diff}
+	}()
+}
+
+func (m *model) startClipboardCopy(column, text string) {
+	go func() {
+		if err := copyToClipboard(text); err != nil {
+			m.msgCh <- clipboardErrMsg{column: column, err: err}
+			return
+		}
+		m.msgCh <- clipboardCopiedMsg{column: column}
+	}()
 }
 
 func (m *model) startNotificationsLoader(gen int) {

@@ -1,6 +1,7 @@
 package github
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -80,6 +81,13 @@ type ReviewComment struct {
 	CommitID          string     `json:"commit_id"`
 	OriginalCommitID  string     `json:"original_commit_id"`
 	User              User       `json:"user"`
+}
+
+type ForcePushInterdiff struct {
+	BeforeSHA  string
+	AfterSHA   string
+	CompareURL string
+	Diff       string
 }
 
 type Client struct {
@@ -290,6 +298,237 @@ func (c *Client) getJSON(ctx context.Context, path string, out any) error {
 	}
 
 	return nil
+}
+
+func (c *Client) getText(ctx context.Context, path string, accept string) (string, error) {
+	req, err := c.newRequest(ctx, path)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(accept) != "" {
+		req.Header.Set("Accept", accept)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("github request failed: %w", err)
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+
+	if err := checkStatus(resp); err != nil {
+		return "", err
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read github response body: %w", err)
+	}
+
+	return string(body), nil
+}
+
+func (c *Client) FetchCommitDiff(ctx context.Context, diffURL string) (string, error) {
+	diff, err := c.getText(ctx, diffURL, "application/vnd.github.v3.diff")
+	if err == nil {
+		return diff, nil
+	}
+
+	alt := toAPICommitURL(diffURL)
+	if alt == "" || alt == diffURL {
+		return "", err
+	}
+
+	return c.getText(ctx, alt, "application/vnd.github.v3.diff")
+}
+
+func (c *Client) FetchForcePushInterdiff(ctx context.Context, owner, repo string, number int, eventID string) (ForcePushInterdiff, error) {
+	before, after, err := c.fetchForcePushBeforeAfter(ctx, owner, repo, number, eventID)
+	if err != nil {
+		return ForcePushInterdiff{}, err
+	}
+	if before == "" || after == "" {
+		return ForcePushInterdiff{}, fmt.Errorf("force-push event %s missing before/after commit", eventID)
+	}
+
+	comparePath := fmt.Sprintf("/repos/%s/%s/compare/%s...%s", url.PathEscape(owner), url.PathEscape(repo), url.PathEscape(before), url.PathEscape(after))
+	diff, err := c.getText(ctx, comparePath, "application/vnd.github.v3.diff")
+	if err != nil {
+		return ForcePushInterdiff{}, err
+	}
+
+	return ForcePushInterdiff{
+		BeforeSHA:  before,
+		AfterSHA:   after,
+		CompareURL: fmt.Sprintf("https://github.com/%s/%s/compare/%s...%s", owner, repo, before, after),
+		Diff:       diff,
+	}, nil
+}
+
+func (c *Client) fetchForcePushBeforeAfter(ctx context.Context, owner, repo string, number int, eventID string) (string, string, error) {
+	query := `query($owner: String!, $repo: String!, $number: Int!, $after: String) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $number) {
+      timelineItems(first: 100, after: $after, itemTypes: [HEAD_REF_FORCE_PUSHED_EVENT]) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          ... on HeadRefForcePushedEvent {
+            id
+            beforeCommit { oid }
+            afterCommit { oid }
+          }
+        }
+      }
+    }
+  }
+}`
+
+	type gqlNode struct {
+		ID           string `json:"id"`
+		BeforeCommit *struct {
+			OID string `json:"oid"`
+		} `json:"beforeCommit"`
+		AfterCommit *struct {
+			OID string `json:"oid"`
+		} `json:"afterCommit"`
+	}
+	var resp struct {
+		Data struct {
+			Repository *struct {
+				PullRequest *struct {
+					TimelineItems struct {
+						PageInfo struct {
+							HasNextPage bool   `json:"hasNextPage"`
+							EndCursor   string `json:"endCursor"`
+						} `json:"pageInfo"`
+						Nodes []gqlNode `json:"nodes"`
+					} `json:"timelineItems"`
+				} `json:"pullRequest"`
+			} `json:"repository"`
+		} `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+
+	afterCursor := ""
+	for {
+		variables := map[string]any{
+			"owner":  owner,
+			"repo":   repo,
+			"number": number,
+			"after":  nil,
+		}
+		if afterCursor != "" {
+			variables["after"] = afterCursor
+		}
+		if err := c.graphQL(ctx, query, variables, &resp); err != nil {
+			return "", "", err
+		}
+		if len(resp.Errors) > 0 {
+			return "", "", fmt.Errorf("github graphql error: %s", resp.Errors[0].Message)
+		}
+		if resp.Data.Repository == nil || resp.Data.Repository.PullRequest == nil {
+			return "", "", fmt.Errorf("pull request not found")
+		}
+
+		for _, node := range resp.Data.Repository.PullRequest.TimelineItems.Nodes {
+			if strings.TrimSpace(eventID) != strings.TrimSpace(node.ID) {
+				continue
+			}
+			before := ""
+			after := ""
+			if node.BeforeCommit != nil {
+				before = strings.TrimSpace(node.BeforeCommit.OID)
+			}
+			if node.AfterCommit != nil {
+				after = strings.TrimSpace(node.AfterCommit.OID)
+			}
+			return before, after, nil
+		}
+
+		page := resp.Data.Repository.PullRequest.TimelineItems.PageInfo
+		if !page.HasNextPage || page.EndCursor == "" {
+			break
+		}
+		afterCursor = page.EndCursor
+	}
+
+	return "", "", fmt.Errorf("force-push event %s not found in pull request timeline", eventID)
+}
+
+func (c *Client) graphQL(ctx context.Context, query string, variables map[string]any, out any) error {
+	body, err := json.Marshal(map[string]any{"query": query, "variables": variables})
+	if err != nil {
+		return fmt.Errorf("failed to encode graphql request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.graphqlEndpointURL(), bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("failed to create github graphql request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("github request failed: %w", err)
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+
+	if err := checkStatus(resp); err != nil {
+		return err
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+		return fmt.Errorf("failed to decode github graphql response: %w", err)
+	}
+	return nil
+}
+
+func (c *Client) graphqlEndpointURL() string {
+	base := strings.TrimRight(c.baseURL, "/")
+	if strings.HasSuffix(base, "/api/v3") {
+		return strings.TrimSuffix(base, "/api/v3") + "/api/graphql"
+	}
+	if strings.HasSuffix(base, "/api") {
+		return base + "/graphql"
+	}
+	return base + "/graphql"
+}
+
+func toAPICommitURL(rawURL string) string {
+	u := strings.TrimSpace(rawURL)
+	if u == "" {
+		return ""
+	}
+	if strings.Contains(u, "api.github.com/repos/") && strings.Contains(u, "/commits/") {
+		return u
+	}
+	if !(strings.HasPrefix(u, "https://github.com/") || strings.HasPrefix(u, "http://github.com/")) {
+		return ""
+	}
+
+	trimmed := strings.TrimPrefix(u, "https://github.com/")
+	trimmed = strings.TrimPrefix(trimmed, "http://github.com/")
+	trimmed = strings.TrimSuffix(trimmed, ".diff")
+	parts := strings.Split(trimmed, "/")
+	if len(parts) < 4 || parts[2] != "commit" {
+		return ""
+	}
+	owner, repo, sha := parts[0], parts[1], parts[3]
+	if owner == "" || repo == "" || sha == "" {
+		return ""
+	}
+
+	return "https://api.github.com/repos/" + owner + "/" + repo + "/commits/" + sha
 }
 
 func (c *Client) newRequest(ctx context.Context, path string) (*http.Request, error) {

@@ -14,7 +14,17 @@ type focusColumn int
 const (
 	focusNotifications focusColumn = iota
 	focusTimeline
+	focusThread
 	focusDetail
+)
+
+type paneMode int
+
+const (
+	paneModeNotificationsTimeline paneMode = iota
+	paneModeTimelineDetail
+	paneModeTimelineThread
+	paneModeThreadDetail
 )
 
 type notifRow struct {
@@ -43,17 +53,38 @@ type threadGroup struct {
 }
 
 type timelineState struct {
-	ref             string
-	rows            []timelineRow
-	rowIndexByID    map[string]int
-	threadByID      map[string]*threadGroup
-	expandedThreads map[string]bool
-	selectedID      string
-	selectedIndex   int
-	scrollOffset    int
-	loading         bool
-	done            bool
-	err             string
+	ref                 string
+	rows                []timelineRow
+	rowIndexByID        map[string]int
+	threadByID          map[string]*threadGroup
+	expandedThreads     map[string]bool
+	commitDiffByID      map[string]commitDiffState
+	forcePushByID       map[string]forcePushDiffState
+	selectedID          string
+	selectedIndex       int
+	scrollOffset        int
+	activeThreadID      string
+	threadSelectedID    string
+	threadSelectedIndex int
+	threadScrollOffset  int
+	loading             bool
+	done                bool
+	err                 string
+}
+
+type commitDiffState struct {
+	loading bool
+	err     string
+	body    string
+}
+
+type forcePushDiffState struct {
+	loading    bool
+	err        string
+	beforeSHA  string
+	afterSHA   string
+	compareURL string
+	body       string
 }
 
 type displayTimelineRow struct {
@@ -61,6 +92,7 @@ type displayTimelineRow struct {
 	label          string
 	threadID       string
 	isThreadHeader bool
+	isThreadRoot   bool
 	event          *ghpr.TimelineEvent
 }
 
@@ -78,6 +110,7 @@ type AppState struct {
 	NotifLoading   bool
 	NotifDone      bool
 	NotifErr       string
+	NotifTab       string
 
 	TimelineGen   int
 	CurrentRef    string
@@ -85,6 +118,8 @@ type AppState struct {
 
 	Status string
 	Quit   bool
+
+	DetailScroll int
 }
 
 func NewState() AppState {
@@ -93,9 +128,12 @@ func NewState() AppState {
 		NotifGen:       1,
 		NotifIndexByID: make(map[string]int),
 		NotifLoading:   true,
+		NotifTab:       allNotificationsTab,
 		TimelineByRef:  make(map[string]*timelineState),
 	}
 }
+
+const allNotificationsTab = "All"
 
 func (s *AppState) currentTimeline() *timelineState {
 	if s.CurrentRef == "" {
@@ -108,6 +146,8 @@ func (s *AppState) currentTimeline() *timelineState {
 			rowIndexByID:    make(map[string]int),
 			threadByID:      make(map[string]*threadGroup),
 			expandedThreads: make(map[string]bool),
+			commitDiffByID:  make(map[string]commitDiffState),
+			forcePushByID:   make(map[string]forcePushDiffState),
 		}
 		s.TimelineByRef[s.CurrentRef] = ts
 	}
@@ -124,6 +164,76 @@ func (s *AppState) selectedNotification() *notifRow {
 	}
 	n := s.Notifications[idx]
 	return &n
+}
+
+func (s *AppState) currentPaneMode() paneMode {
+	if s.Focus == focusNotifications {
+		return paneModeNotificationsTimeline
+	}
+	if s == nil || s.CurrentRef == "" {
+		return paneModeTimelineDetail
+	}
+	ts := s.TimelineByRef[s.CurrentRef]
+	if ts != nil && ts.activeThreadID != "" {
+		if s.Focus == focusTimeline {
+			return paneModeTimelineThread
+		}
+		return paneModeThreadDetail
+	}
+	return paneModeTimelineDetail
+}
+
+func (s *AppState) notificationTabs() []string {
+	tabs := []string{allNotificationsTab}
+	seen := map[string]bool{allNotificationsTab: true}
+	for _, n := range s.Notifications {
+		org := notificationOrgFromRepo(n.repo)
+		if org == "" || seen[org] {
+			continue
+		}
+		tabs = append(tabs, org)
+		seen[org] = true
+	}
+	return tabs
+}
+
+func (s *AppState) activeNotificationTab() string {
+	tab := strings.TrimSpace(s.NotifTab)
+	if tab == "" {
+		return allNotificationsTab
+	}
+	for _, t := range s.notificationTabs() {
+		if t == tab {
+			return t
+		}
+	}
+	return allNotificationsTab
+}
+
+func (s *AppState) visibleNotifications() []notifRow {
+	tab := s.activeNotificationTab()
+	if tab == allNotificationsTab {
+		return s.Notifications
+	}
+	rows := make([]notifRow, 0, len(s.Notifications))
+	for _, n := range s.Notifications {
+		if notificationOrgFromRepo(n.repo) == tab {
+			rows = append(rows, n)
+		}
+	}
+	return rows
+}
+
+func indexOfNotificationByID(rows []notifRow, id string) int {
+	if id == "" {
+		return -1
+	}
+	for i := range rows {
+		if rows[i].id == id {
+			return i
+		}
+	}
+	return -1
 }
 
 func (s *AppState) selectedTimelineEvent() *ghpr.TimelineEvent {
@@ -143,10 +253,36 @@ func (s *AppState) selectedTimelineEvent() *ghpr.TimelineEvent {
 	if row.event != nil {
 		return row.event
 	}
-	if row.isThreadHeader {
-		return &ghpr.TimelineEvent{Type: "thread", ID: row.threadID}
-	}
 	return nil
+}
+
+func (s *AppState) selectedThreadEvent() *ghpr.TimelineEvent {
+	ts := s.currentTimeline()
+	if ts == nil || ts.activeThreadID == "" {
+		return nil
+	}
+	rows := ts.threadRows(ts.activeThreadID)
+	if len(rows) == 0 {
+		return nil
+	}
+	idx := indexOfThreadSelection(rows, ts.threadSelectedID)
+	if idx < 0 || idx >= len(rows) {
+		return nil
+	}
+	return rows[idx].event
+}
+
+func (s *AppState) selectedDetailEvent() *ghpr.TimelineEvent {
+	ts := s.currentTimeline()
+	if ts == nil {
+		return nil
+	}
+	if ts.activeThreadID != "" && (s.Focus == focusThread || s.Focus == focusDetail) {
+		if ev := s.selectedThreadEvent(); ev != nil {
+			return ev
+		}
+	}
+	return s.selectedTimelineEvent()
 }
 
 func (s *AppState) rebuildNotifIndex() {
@@ -310,31 +446,18 @@ func (ts *timelineState) displayRows() []displayTimelineRow {
 	rows := make([]displayTimelineRow, 0, len(ts.rows))
 	for _, base := range ts.rows {
 		if base.thread != nil {
+			root := base.thread.rootEvent()
+			if root == nil {
+				continue
+			}
 			head := displayTimelineRow{
 				id:             threadHeaderID(base.thread.id),
 				threadID:       base.thread.id,
 				isThreadHeader: true,
-				label:          fmt.Sprintf("%s (%d comments)", firstNonEmpty(base.thread.path, "thread"), len(base.thread.items)),
+				event:          root,
+				label:          compactEventSummary(*root),
 			}
 			rows = append(rows, head)
-			if ts.expandedThreads[base.thread.id] {
-				for i := range base.thread.items {
-					ev := base.thread.items[i]
-					lead := "│ "
-					prefix := "├─"
-					if i == len(base.thread.items)-1 {
-						lead = "  "
-						prefix = "└─"
-					}
-					label := lead + prefix + " " + eventSummary(ev)
-					rows = append(rows, displayTimelineRow{
-						id:       threadChildID(base.thread.id, ev.ID),
-						threadID: base.thread.id,
-						event:    &ev,
-						label:    label,
-					})
-				}
-			}
 			continue
 		}
 		if base.event != nil {
@@ -342,11 +465,44 @@ func (ts *timelineState) displayRows() []displayTimelineRow {
 			rows = append(rows, displayTimelineRow{
 				id:    eventRowID(ev.ID),
 				event: &ev,
-				label: eventSummary(ev),
+				label: compactEventSummary(ev),
 			})
 		}
 	}
 	return rows
+}
+
+func (ts *timelineState) threadRows(threadID string) []displayTimelineRow {
+	group := ts.threadByID[threadID]
+	if group == nil || len(group.items) == 0 {
+		return nil
+	}
+	rows := make([]displayTimelineRow, 0, len(group.items))
+	for i := 0; i < len(group.items); i++ {
+		ev := group.items[i]
+		rows = append(rows, displayTimelineRow{
+			id:           threadChildID(threadID, ev.ID),
+			threadID:     threadID,
+			isThreadRoot: i == 0,
+			event:        &ev,
+			label:        compactThreadChildSummary(ev),
+		})
+	}
+	return rows
+}
+
+func compactThreadChildSummary(ev ghpr.TimelineEvent) string {
+	actor := eventActorLabel(ev)
+	message := truncatePreview(eventPreviewText(ev), 96)
+
+	parts := make([]string, 0, 2)
+	if actor != "" {
+		parts = append(parts, actor)
+	}
+	if message != "" {
+		parts = append(parts, message)
+	}
+	return stringsJoin(parts, "  ")
 }
 
 func indexOfTimelineSelection(rows []displayTimelineRow, selectedID string) int {
@@ -362,6 +518,21 @@ func indexOfTimelineSelection(rows []displayTimelineRow, selectedID string) int 
 		}
 	}
 	return 0
+}
+
+func indexOfThreadSelection(rows []displayTimelineRow, selectedID string) int {
+	if len(rows) == 0 {
+		return -1
+	}
+	if selectedID == "" {
+		return 0
+	}
+	for i := range rows {
+		if rows[i].id == selectedID {
+			return i
+		}
+	}
+	return -1
 }
 
 func timelineRowComesBefore(a timelineRow, b timelineRow) bool {
@@ -385,41 +556,164 @@ func isThreadedReviewComment(ev ghpr.TimelineEvent) bool {
 	return ev.Type == "github.review_comment" && ev.Comment != nil && ev.Comment.ThreadID != nil && *ev.Comment.ThreadID != ""
 }
 
-func eventSummary(ev ghpr.TimelineEvent) string {
-	base := ev.Type
-	if ev.Event != nil && *ev.Event != "" {
-		base = *ev.Event
+func compactEventSummary(ev ghpr.TimelineEvent) string {
+	kind := eventKindLabel(ev)
+	actor := eventActorLabel(ev)
+	message := truncatePreview(eventPreviewText(ev), 96)
+
+	parts := []string{kind}
+	if actor != "" {
+		parts = append(parts, actor)
 	}
-	if ev.Comment != nil && ev.Comment.Body != nil && *ev.Comment.Body != "" {
-		return fmt.Sprintf("%s: %s", base, oneLine(*ev.Comment.Body))
+	if message != "" {
+		parts = append(parts, message)
+	}
+	return stringsJoin(parts, "  ")
+}
+
+func eventKindLabel(ev ghpr.TimelineEvent) string {
+	if ev.Event != nil {
+		if e := oneLine(*ev.Event); e != "" {
+			switch e {
+			case "review_requested":
+				return "requested"
+			case "review_request_removed":
+				return "unrequested"
+			case "line-commented":
+				return "commented"
+			case "head_ref_force_pushed":
+				return "force_push"
+			}
+			return e
+		}
+	}
+	switch ev.Type {
+	case "pr.opened", "issue.opened":
+		return "opened"
+	case "github.review_comment":
+		return "review-comment"
+	case "github.timeline.commented":
+		return "commented"
+	case "github.timeline.committed":
+		return "committed"
+	case "github.timeline.reviewed":
+		return "reviewed"
+	case "github.timeline.head_ref_force_pushed":
+		return "force_push"
+	}
+	if idx := strings.LastIndex(ev.Type, "."); idx >= 0 && idx < len(ev.Type)-1 {
+		return ev.Type[idx+1:]
+	}
+	return ev.Type
+}
+
+func eventActorLabel(ev ghpr.TimelineEvent) string {
+	if ev.Actor == nil {
+		return ""
+	}
+	return oneLine(ev.Actor.Login)
+}
+
+func eventPreviewText(ev ghpr.TimelineEvent) string {
+	if ev.Comment != nil && ev.Comment.Body != nil {
+		if body := oneLine(*ev.Comment.Body); body != "" {
+			return body
+		}
 	}
 	if ev.Pr != nil {
-		return fmt.Sprintf("pr.opened: %s", oneLine(ev.Pr.Title))
+		if title := oneLine(ev.Pr.Title); title != "" {
+			return title
+		}
 	}
 	if ev.Issue != nil {
-		return fmt.Sprintf("issue.opened: %s", oneLine(ev.Issue.Title))
+		if title := oneLine(ev.Issue.Title); title != "" {
+			return title
+		}
 	}
-	return base
+	if ev.Commit != nil && ev.Commit.SHA != nil {
+		if sha := oneLine(*ev.Commit.SHA); sha != "" {
+			if len(sha) > 12 {
+				sha = sha[:12]
+			}
+			return sha
+		}
+	}
+	return ""
+}
+
+func truncatePreview(s string, maxLen int) string {
+	if maxLen <= 0 {
+		return ""
+	}
+	s = oneLine(s)
+	if len(s) <= maxLen {
+		return s
+	}
+	if maxLen <= 3 {
+		return "."
+	}
+	return strings.TrimSpace(s[:maxLen-3]) + "..."
 }
 
 func oneLine(s string) string {
 	s = strings.TrimSpace(s)
+	s = strings.ReplaceAll(s, "\r", " ")
+	s = strings.ReplaceAll(s, "\t", " ")
 	s = strings.ReplaceAll(s, "\n", " ")
-	if len(s) > 80 {
-		return s[:77] + "..."
-	}
 	return s
+}
+
+func compactThreadPath(path string) string {
+	path = oneLine(path)
+	if path == "" {
+		return path
+	}
+
+	parts := strings.Split(path, "/")
+	filtered := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+		filtered = append(filtered, part)
+	}
+
+	if len(filtered) < 4 {
+		return stringsJoin(filtered, "/")
+	}
+
+	return filtered[0] + "/../" + filtered[len(filtered)-2] + "/" + filtered[len(filtered)-1]
 }
 
 func eventRowID(id string) string              { return "event:" + id }
 func threadHeaderID(threadID string) string    { return "thread:" + threadID }
 func threadChildID(threadID, id string) string { return "thread:" + threadID + ":" + id }
 
+func (g *threadGroup) rootEvent() *ghpr.TimelineEvent {
+	if g == nil || len(g.items) == 0 {
+		return nil
+	}
+	ev := g.items[0]
+	return &ev
+}
+
 func firstNonEmptyPtr(s *string) string {
 	if s == nil {
 		return ""
 	}
 	return *s
+}
+
+func notificationOrgFromRepo(repo string) string {
+	repo = oneLine(repo)
+	if repo == "" {
+		return ""
+	}
+	idx := strings.Index(repo, "/")
+	if idx <= 0 {
+		return repo
+	}
+	return repo[:idx]
 }
 
 func firstNonEmpty(items ...string) string {

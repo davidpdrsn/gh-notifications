@@ -35,6 +35,13 @@ type CommitContext struct {
 	URL *string `json:"url,omitempty"`
 }
 
+type ForcePushInterdiff struct {
+	BeforeSHA  string `json:"before_sha"`
+	AfterSHA   string `json:"after_sha"`
+	CompareURL string `json:"compare_url"`
+	Diff       string `json:"diff"`
+}
+
 type TimelineEvent struct {
 	Type       string           `json:"type"`
 	OccurredAt time.Time        `json:"occurred_at"`

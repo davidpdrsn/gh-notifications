@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"gh-pr/internal/github"
+	"gh-pr/internal/timelineapi"
 )
 
 func TestBuildWithComments_StableNonEmptyIDs(t *testing.T) {
@@ -207,4 +208,144 @@ func TestMapTimelineItem_LineCommentedIncludesCommentURL(t *testing.T) {
 	if *e.Comment.Url != "https://github.com/o/r/pull/2#discussion_r777" {
 		t.Fatalf("unexpected comment url: %q", *e.Comment.Url)
 	}
+}
+
+func TestMapTimelineItem_CommittedUsesAuthorDateWhenCreatedAtMissing(t *testing.T) {
+	raw := []byte(`{"id":123,"event":"committed","sha":"abc","html_url":"https://github.com/o/r/commit/abc","author":{"date":"2024-01-02T03:05:00Z"}}`)
+
+	e, w, ok := MapTimelineItem(raw)
+	if w != "" {
+		t.Fatalf("unexpected warning: %q", w)
+	}
+	if !ok {
+		t.Fatalf("expected event to be mapped")
+	}
+	if got := e.OccurredAt.Format(time.RFC3339); got != "2024-01-02T03:05:00Z" {
+		t.Fatalf("unexpected occurred_at: %s", got)
+	}
+}
+
+func TestCommitDiffURLPrefersAPICommitEndpoint(t *testing.T) {
+	if got := commitDiffURL("https://github.com/o/r/commit/abc123"); got != "https://api.github.com/repos/o/r/commits/abc123" {
+		t.Fatalf("unexpected api diff url from html commit url: %q", got)
+	}
+	if got := commitDiffURL("https://github.com/o/r/commit/abc123.diff"); got != "https://api.github.com/repos/o/r/commits/abc123" {
+		t.Fatalf("unexpected api diff url from html diff url: %q", got)
+	}
+	if got := commitDiffURL("https://api.github.com/repos/o/r/commits/abc123"); got != "https://api.github.com/repos/o/r/commits/abc123" {
+		t.Fatalf("expected api commit url to stay unchanged: %q", got)
+	}
+}
+
+func TestMapTimelineItem_ForcePushedPrefersNodeID(t *testing.T) {
+	raw := []byte(`{"id":22570049714,"node_id":"FP_node_id_123","event":"head_ref_force_pushed","created_at":"2026-02-05T20:19:15Z"}`)
+
+	e, w, ok := MapTimelineItem(raw)
+	if w != "" {
+		t.Fatalf("unexpected warning: %q", w)
+	}
+	if !ok {
+		t.Fatalf("expected event to be mapped")
+	}
+	if e.Id != "FP_node_id_123" {
+		t.Fatalf("expected force-push event id to prefer node_id, got %q", e.Id)
+	}
+}
+
+func TestShouldIgnorePRTimelineEvent(t *testing.T) {
+	e := timelineEventWithName("cross-referenced")
+	if !ShouldIgnorePRTimelineEvent(e) {
+		t.Fatalf("expected cross-referenced to be ignored")
+	}
+
+	e = timelineEventWithName("labeled")
+	if !ShouldIgnorePRTimelineEvent(e) {
+		t.Fatalf("expected labeled to be ignored")
+	}
+
+	e = timelineEventWithName("subscribed")
+	if !ShouldIgnorePRTimelineEvent(e) {
+		t.Fatalf("expected subscribed to be ignored")
+	}
+
+	e = timelineEventWithName("mentioned")
+	if !ShouldIgnorePRTimelineEvent(e) {
+		t.Fatalf("expected mentioned to be ignored")
+	}
+
+	e = timelineEventWithName("auto_squash_enabled")
+	if !ShouldIgnorePRTimelineEvent(e) {
+		t.Fatalf("expected auto_squash_enabled to be ignored")
+	}
+
+	e = timelineEventWithName("head_ref_deleted")
+	if !ShouldIgnorePRTimelineEvent(e) {
+		t.Fatalf("expected head_ref_deleted to be ignored")
+	}
+
+	e = timelineEventWithName("commented")
+	if ShouldIgnorePRTimelineEvent(e) {
+		t.Fatalf("expected commented to be included")
+	}
+
+	e = timelineEventWithName("committed")
+	if ShouldIgnorePRTimelineEvent(e) {
+		t.Fatalf("expected committed to be included")
+	}
+}
+
+func TestBuildWithComments_IgnoresConfiguredPREvents(t *testing.T) {
+	createdAt := time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC)
+	pr := github.PullRequest{
+		Number:    42,
+		Title:     "Test",
+		Body:      "Body",
+		CreatedAt: createdAt,
+		User: github.User{
+			Login: "alice",
+			ID:    11,
+			Type:  "",
+		},
+	}
+
+	rawItems := []github.TimelineItem{
+		{Raw: []byte(`{"id":100,"event":"cross-referenced","created_at":"2024-01-02T03:06:00Z"}`)},
+		{Raw: []byte(`{"id":104,"event":"head_ref_deleted","created_at":"2024-01-02T03:06:10Z"}`)},
+		{Raw: []byte(`{"id":101,"event":"labeled","created_at":"2024-01-02T03:06:30Z"}`)},
+		{Raw: []byte(`{"id":102,"event":"subscribed","created_at":"2024-01-02T03:06:45Z"}`)},
+		{Raw: []byte(`{"id":105,"event":"mentioned","created_at":"2024-01-02T03:06:46Z"}`)},
+		{Raw: []byte(`{"id":106,"event":"auto_squash_enabled","created_at":"2024-01-02T03:06:47Z"}`)},
+		{Raw: []byte(`{"id":103,"event":"commented","created_at":"2024-01-02T03:07:00Z","body":"keep me"}`)},
+	}
+
+	events, _ := BuildWithComments(pr, rawItems, nil)
+
+	if len(events) != 2 {
+		t.Fatalf("expected opened + commented only, got %d events", len(events))
+	}
+	if events[0].Type != "pr.opened" {
+		t.Fatalf("expected first event to be pr.opened, got %q", events[0].Type)
+	}
+	if events[1].Event == nil || *events[1].Event != "commented" {
+		t.Fatalf("expected second event to be commented, got %+v", events[1])
+	}
+}
+
+func TestMapTimelineItem_ReviewRequestedIncludesRequestedReviewerInCommentBody(t *testing.T) {
+	raw := []byte(`{"id":200,"event":"review_requested","created_at":"2024-01-02T03:07:00Z","actor":{"login":"bob","id":2},"requested_reviewer":{"login":"alice","id":3}}`)
+
+	e, w, ok := MapTimelineItem(raw)
+	if w != "" {
+		t.Fatalf("unexpected warning: %q", w)
+	}
+	if !ok {
+		t.Fatalf("expected event to be mapped")
+	}
+	if e.Comment == nil || e.Comment.Body == nil || *e.Comment.Body != "@alice" {
+		t.Fatalf("expected requested reviewer in comment body, got %+v", e.Comment)
+	}
+}
+
+func timelineEventWithName(name string) timelineapi.Event {
+	return timelineapi.Event{Event: &name}
 }
