@@ -2,6 +2,8 @@ package tui
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"gh-pr/ghpr"
 	"gh-pr/internal/readstate"
@@ -111,6 +113,49 @@ func waitForAsyncMsg(ch <-chan tea.Msg) tea.Cmd {
 }
 
 func (m *model) debugStatus() string {
-	parts := []string{"q", "tab", "h/l", "j/k", "r", "H", "^p/^n", "^u/^d", "C"}
+	parts := []string{"q", "tab", "h/l", "j/k", "r", "^r", "H", "^p/^n", "^u/^d", "C"}
 	return stringsJoin(parts, "   ")
+}
+
+func (m *model) bottomStatus() string {
+	left := m.debugStatus()
+	right := ""
+	if m.state.RefreshInFlight {
+		spinnerFrames := []string{"-", "\\", "|", "/"}
+		frame := spinnerFrames[m.state.RefreshSpinnerIndex%len(spinnerFrames)]
+		left, total := m.state.refreshProgress()
+		right = fmt.Sprintf("refresh %s %d/%d", frame, left, total)
+	} else if !m.state.LastRefreshAt.IsZero() {
+		right = "last refresh " + m.state.LastRefreshAt.Local().Format("15:04:05")
+	}
+	if right == "" {
+		if strings.TrimSpace(m.state.Status) != "" {
+			right = m.state.Status
+		}
+	}
+	if right == "" {
+		return left
+	}
+	leftW := lipgloss.Width(left)
+	rightW := lipgloss.Width(right)
+	avail := m.state.Width - 1
+	if avail < 1 {
+		avail = 1
+	}
+	if rightW >= avail {
+		return clampDisplayWidth(right, avail)
+	}
+	if leftW+1+rightW > avail {
+		maxLeft := avail - rightW - 1
+		if maxLeft < 1 {
+			return right
+		}
+		left = clampDisplayWidth(left, maxLeft)
+		leftW = lipgloss.Width(left)
+	}
+	gap := avail - leftW - rightW
+	if gap < 1 {
+		gap = 1
+	}
+	return left + strings.Repeat(" ", gap) + right
 }

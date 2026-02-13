@@ -75,6 +75,14 @@ type timelineState struct {
 	err                 string
 }
 
+type timelineRefreshAnchor struct {
+	selectedID          string
+	selectedIndex       int
+	activeThreadID      string
+	threadSelectedID    string
+	threadSelectedIndex int
+}
+
 type commitDiffState struct {
 	loading bool
 	err     string
@@ -123,6 +131,23 @@ type AppState struct {
 	Status string
 	Quit   bool
 
+	TimelineLoadingRef string
+
+	RefreshInFlight            bool
+	RefreshPending             bool
+	RefreshStage               string
+	RefreshQueue               []string
+	RefreshTotalRefs           int
+	RefreshActiveRef           string
+	RefreshSpinnerIndex        int
+	LastRefreshAt              time.Time
+	RefreshNotifAnchorID       string
+	RefreshNotifAnchorIndex    int
+	RefreshNotifBuffer         []notifRow
+	RefreshNotifSeen           map[string]bool
+	RefreshTimelinePrevByRef   map[string]*timelineState
+	RefreshTimelineAnchorByRef map[string]timelineRefreshAnchor
+
 	DetailScroll     int
 	NextReadOpID     int64
 	PendingRead      map[int64]pendingReadOp
@@ -140,15 +165,50 @@ type pendingReadOp struct {
 
 func NewState() AppState {
 	return AppState{
-		Focus:            focusNotifications,
-		NotifGen:         1,
-		NotifIndexByID:   make(map[string]int),
-		NotifLoading:     true,
-		NotifTab:         allNotificationsTab,
-		TimelineByRef:    make(map[string]*timelineState),
-		PendingRead:      make(map[int64]pendingReadOp),
-		notifMarkerByRef: make(map[string]string),
+		Focus:                      focusNotifications,
+		NotifGen:                   1,
+		NotifIndexByID:             make(map[string]int),
+		NotifLoading:               true,
+		NotifTab:                   allNotificationsTab,
+		TimelineByRef:              make(map[string]*timelineState),
+		RefreshNotifSeen:           make(map[string]bool),
+		RefreshTimelinePrevByRef:   make(map[string]*timelineState),
+		RefreshTimelineAnchorByRef: make(map[string]timelineRefreshAnchor),
+		PendingRead:                make(map[int64]pendingReadOp),
+		notifMarkerByRef:           make(map[string]string),
 	}
+}
+
+func (s AppState) refreshProgress() (left int, total int) {
+	total = s.RefreshTotalRefs
+	if total < 0 {
+		total = 0
+	}
+
+	if !s.RefreshInFlight {
+		return 0, total
+	}
+
+	switch s.RefreshStage {
+	case "timeline":
+		left = len(s.RefreshQueue)
+		if s.RefreshActiveRef != "" {
+			left++
+		}
+	case "notifications":
+		left = 0
+	default:
+		left = len(s.RefreshQueue)
+	}
+
+	if left < 0 {
+		left = 0
+	}
+	if total < left {
+		total = left
+	}
+
+	return left, total
 }
 
 const allNotificationsTab = "All"

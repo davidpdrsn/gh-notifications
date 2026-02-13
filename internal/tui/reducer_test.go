@@ -1614,3 +1614,220 @@ func TestMotionCountPrefixMovesMultipleRows(t *testing.T) {
 		t.Fatalf("expected selection to clamp at top, got %d", idx)
 	}
 }
+
+func TestCtrlRStartsRefreshCurrentRefFirst(t *testing.T) {
+	state := NewState()
+	state.CurrentRef = "o/r#2"
+	state.TimelineByRef["o/r#1"] = &timelineState{ref: "o/r#1"}
+	state.TimelineByRef["o/r#2"] = &timelineState{ref: "o/r#2"}
+	state.TimelineByRef["o/r#3"] = &timelineState{ref: "o/r#3"}
+
+	next, effects := Reduce(state, KeyEvent{Key: "ctrl+r"})
+
+	if !next.RefreshInFlight {
+		t.Fatalf("expected refresh to start")
+	}
+	if next.RefreshActiveRef != "o/r#2" {
+		t.Fatalf("expected current ref refreshed first, got %q", next.RefreshActiveRef)
+	}
+	if next.TimelineLoadingRef != "o/r#2" {
+		t.Fatalf("expected timeline loading ref set, got %q", next.TimelineLoadingRef)
+	}
+	if len(next.RefreshQueue) != 2 || next.RefreshQueue[0] != "o/r#1" || next.RefreshQueue[1] != "o/r#3" {
+		t.Fatalf("unexpected refresh queue order: %+v", next.RefreshQueue)
+	}
+
+	foundStart := false
+	foundSpinner := false
+	for _, eff := range effects {
+		switch e := eff.(type) {
+		case StartTimelineEffect:
+			if e.Ref == "o/r#2" {
+				foundStart = true
+			}
+		case ScheduleRefreshSpinnerTickEffect:
+			foundSpinner = true
+		}
+	}
+	if !foundStart {
+		t.Fatalf("expected timeline start effect for current ref")
+	}
+	if !foundSpinner {
+		t.Fatalf("expected spinner tick scheduling effect")
+	}
+}
+
+func TestSelectionDuringRefreshDoesNotInterruptRefreshLoader(t *testing.T) {
+	state := NewState()
+	state.Focus = focusNotifications
+	state.Notifications = []notifRow{
+		{id: "n1", ref: "o/r#1", repo: "o/r", title: "one", updatedAt: time.Now()},
+		{id: "n2", ref: "o/r#2", repo: "o/r", title: "two", updatedAt: time.Now().Add(-time.Minute)},
+	}
+	state.rebuildNotifIndex()
+	state.SelectedNotif = "n1"
+	state.NotifSelected = 0
+	state.CurrentRef = "o/r#1"
+	state.TimelineByRef["o/r#1"] = &timelineState{ref: "o/r#1"}
+	state.TimelineByRef["o/r#2"] = &timelineState{ref: "o/r#2"}
+
+	next, _ := Reduce(state, KeyEvent{Key: "ctrl+r"})
+	beforeGen := next.TimelineGen
+	beforeLoadingRef := next.TimelineLoadingRef
+
+	afterMove, effects := Reduce(next, KeyEvent{Key: "j"})
+
+	if afterMove.SelectedNotif != "n2" {
+		t.Fatalf("expected selection to move to n2, got %q", afterMove.SelectedNotif)
+	}
+	if afterMove.TimelineGen != beforeGen {
+		t.Fatalf("expected navigation during refresh not to change timeline generation")
+	}
+	if afterMove.TimelineLoadingRef != beforeLoadingRef {
+		t.Fatalf("expected refresh loader ownership to stay on %q, got %q", beforeLoadingRef, afterMove.TimelineLoadingRef)
+	}
+	for _, eff := range effects {
+		switch eff.(type) {
+		case CancelTimelineEffect:
+			t.Fatalf("unexpected cancel timeline effect during refresh navigation")
+		case StartTimelineEffect:
+			t.Fatalf("unexpected start timeline effect during refresh navigation")
+		}
+	}
+
+	afterDone, doneEffects := Reduce(afterMove, TimelineDoneEvent{Generation: beforeGen, Ref: "o/r#1"})
+	if !afterDone.RefreshInFlight {
+		t.Fatalf("expected refresh to continue after first timeline finishes")
+	}
+	if afterDone.RefreshActiveRef != "o/r#2" {
+		t.Fatalf("expected refresh to continue with o/r#2, got %q", afterDone.RefreshActiveRef)
+	}
+	if afterDone.TimelineLoadingRef != "o/r#2" {
+		t.Fatalf("expected timeline loading ref to move to o/r#2, got %q", afterDone.TimelineLoadingRef)
+	}
+	foundNextStart := false
+	for _, eff := range doneEffects {
+		if start, ok := eff.(StartTimelineEffect); ok && start.Ref == "o/r#2" {
+			foundNextStart = true
+			break
+		}
+	}
+	if !foundNextStart {
+		t.Fatalf("expected next timeline refresh start effect")
+	}
+}
+
+func TestRefreshTimelineFallsBackToClosestSelectionWhenMissing(t *testing.T) {
+	state := NewState()
+	state.CurrentRef = "o/r#1"
+	state.TimelineByRef[state.CurrentRef] = &timelineState{
+		ref:                state.CurrentRef,
+		rowIndexByID:       map[string]int{},
+		threadByID:         map[string]*threadGroup{},
+		expandedThreads:    map[string]bool{},
+		readByEventID:      map[string]bool{},
+		readKnownByEventID: map[string]bool{"e1": true, "e2": true, "e3": true},
+	}
+	ts := state.TimelineByRef[state.CurrentRef]
+	body := "b"
+	ts.insertTimelineEvent(ghpr.TimelineEvent{ID: "e1", Type: "github.timeline.commented", OccurredAt: time.Now().Add(-time.Minute), Comment: &ghpr.CommentContext{Body: &body}})
+	ts.insertTimelineEvent(ghpr.TimelineEvent{ID: "e2", Type: "github.timeline.commented", OccurredAt: time.Now(), Comment: &ghpr.CommentContext{Body: &body}})
+	ts.insertTimelineEvent(ghpr.TimelineEvent{ID: "e3", Type: "github.timeline.commented", OccurredAt: time.Now().Add(time.Minute), Comment: &ghpr.CommentContext{Body: &body}})
+	ts.selectedID = eventRowID("e2")
+	ts.selectedIndex = 1
+	next, _ := Reduce(state, KeyEvent{Key: "ctrl+r"})
+	gen := next.TimelineGen
+
+	next, _ = Reduce(next, TimelineArrivedEvent{Generation: gen, Ref: state.CurrentRef, Event: ghpr.TimelineEvent{ID: "e1", Type: "github.timeline.commented", OccurredAt: time.Now().Add(-time.Minute), Comment: &ghpr.CommentContext{Body: &body}}})
+	next, _ = Reduce(next, TimelineArrivedEvent{Generation: gen, Ref: state.CurrentRef, Event: ghpr.TimelineEvent{ID: "e3", Type: "github.timeline.commented", OccurredAt: time.Now().Add(time.Minute), Comment: &ghpr.CommentContext{Body: &body}}})
+	next, _ = Reduce(next, TimelineDoneEvent{Generation: gen, Ref: state.CurrentRef})
+
+	got := next.TimelineByRef[state.CurrentRef].selectedID
+	if got != eventRowID("e3") {
+		t.Fatalf("expected closest fallback selection e3, got %q", got)
+	}
+}
+
+func TestRefreshNotificationsFallsBackToClosestSelectionWhenMissing(t *testing.T) {
+	state := NewState()
+	state.Notifications = []notifRow{
+		{id: "n1", ref: "o/r#1", repo: "o/r", title: "one", updatedAt: time.Now()},
+		{id: "n2", ref: "o/r#2", repo: "o/r", title: "two", updatedAt: time.Now().Add(-time.Minute)},
+		{id: "n3", ref: "o/r#3", repo: "o/r", title: "three", updatedAt: time.Now().Add(-2 * time.Minute)},
+	}
+	state.rebuildNotifIndex()
+	state.SelectedNotif = "n2"
+	state.NotifSelected = 1
+	state.CurrentRef = "o/r#2"
+	state.TimelineByRef[state.CurrentRef] = &timelineState{ref: state.CurrentRef}
+
+	next, _ := Reduce(state, KeyEvent{Key: "ctrl+r"})
+	gen := next.TimelineGen
+	next, _ = Reduce(next, TimelineDoneEvent{Generation: gen, Ref: state.CurrentRef})
+	nGen := next.NotifGen
+
+	next, _ = Reduce(next, NotificationsArrivedEvent{Generation: nGen, Item: ghpr.NotificationEvent{ID: "n1", UpdatedAt: time.Now(), Repository: ghpr.NotificationRepository{Owner: "o", Repo: "r"}, Subject: ghpr.NotificationSubject{Title: "one"}, Target: ghpr.NotificationTarget{Kind: "issue", Ref: "o/r#1"}}})
+	next, _ = Reduce(next, NotificationsArrivedEvent{Generation: nGen, Item: ghpr.NotificationEvent{ID: "n3", UpdatedAt: time.Now().Add(-time.Minute), Repository: ghpr.NotificationRepository{Owner: "o", Repo: "r"}, Subject: ghpr.NotificationSubject{Title: "three"}, Target: ghpr.NotificationTarget{Kind: "issue", Ref: "o/r#3"}}})
+	next, _ = Reduce(next, NotificationsDoneEvent{Generation: nGen})
+
+	if next.SelectedNotif != "n3" {
+		t.Fatalf("expected closest fallback notification n3, got %q", next.SelectedNotif)
+	}
+}
+
+func TestTimelineWarnSkipsMapperWarningNoise(t *testing.T) {
+	state := NewState()
+	state.CurrentRef = "o/r#1"
+	state.TimelineLoadingRef = state.CurrentRef
+	state.TimelineGen = 1
+	state.Status = "existing"
+
+	next, _ := Reduce(state, TimelineWarnEvent{
+		Generation: state.TimelineGen,
+		Ref:        state.CurrentRef,
+		Message:    "warning: skipping unknown timeline event type=\"convert_to_draft\" id=1 occurred_at=2026-02-13T20:06:15Z",
+	})
+
+	if next.Status != "existing" {
+		t.Fatalf("expected mapper warning to be suppressed, got %q", next.Status)
+	}
+}
+
+func TestAutoRefreshTickDoesNotQueueWhileRefreshInFlight(t *testing.T) {
+	state := NewState()
+	state.RefreshInFlight = true
+	state.RefreshStage = "timeline"
+	state.RefreshPending = false
+
+	next, effects := Reduce(state, AutoRefreshTickEvent{})
+
+	if next.RefreshPending {
+		t.Fatalf("expected auto-refresh tick not to queue another refresh")
+	}
+	foundSchedule := false
+	for _, eff := range effects {
+		if _, ok := eff.(ScheduleAutoRefreshTickEffect); ok {
+			foundSchedule = true
+			break
+		}
+	}
+	if !foundSchedule {
+		t.Fatalf("expected auto-refresh schedule effect")
+	}
+}
+
+func TestFinishRefreshDoesNotSetRefreshedStatus(t *testing.T) {
+	state := NewState()
+	state.CurrentRef = "o/r#1"
+	state.TimelineByRef[state.CurrentRef] = &timelineState{ref: state.CurrentRef}
+
+	next, _ := Reduce(state, KeyEvent{Key: "ctrl+r"})
+	gen := next.TimelineGen
+	next, _ = Reduce(next, TimelineDoneEvent{Generation: gen, Ref: state.CurrentRef})
+	nGen := next.NotifGen
+	next, _ = Reduce(next, NotificationsDoneEvent{Generation: nGen})
+
+	if next.Status == "refreshed" {
+		t.Fatalf("expected no refreshed status text")
+	}
+}

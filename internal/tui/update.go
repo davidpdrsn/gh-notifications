@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"time"
 
 	"gh-pr/ghpr"
 
@@ -99,6 +100,9 @@ type clipboardErrMsg struct {
 	err    error
 }
 
+type autoRefreshTickMsg struct{}
+type refreshSpinnerTickMsg struct{}
+
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	events := make([]Event, 0, 1)
 	asyncMsg := false
@@ -168,6 +172,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case clipboardErrMsg:
 		asyncMsg = true
 		events = append(events, ClipboardCopyFailedEvent{Column: t.column, Err: t.err.Error()})
+	case autoRefreshTickMsg:
+		asyncMsg = true
+		events = append(events, AutoRefreshTickEvent{})
+	case refreshSpinnerTickMsg:
+		asyncMsg = true
+		events = append(events, RefreshSpinnerTickEvent{})
 	}
 
 	for _, ev := range events {
@@ -191,7 +201,14 @@ func (m *model) applyEffects(effects []Effect) {
 	for _, effect := range effects {
 		switch e := effect.(type) {
 		case StartNotificationsEffect:
-			m.startNotificationsLoader(e.Generation)
+			ctx := m.ctx
+			var cancel context.CancelFunc
+			if m.state.RefreshInFlight && m.state.RefreshStage == "notifications" {
+				refreshCtx, c := context.WithTimeout(m.ctx, 45*time.Second)
+				ctx = refreshCtx
+				cancel = c
+			}
+			m.startNotificationsLoader(ctx, cancel, e.Generation)
 		case CancelTimelineEffect:
 			if m.timelineCancel != nil {
 				m.timelineCancel()
@@ -202,6 +219,9 @@ func (m *model) applyEffects(effects []Effect) {
 				m.timelineCancel()
 			}
 			ctx, cancel := context.WithCancel(m.ctx)
+			if m.state.RefreshInFlight && m.state.RefreshStage == "timeline" && m.state.RefreshActiveRef == e.Ref {
+				ctx, cancel = context.WithTimeout(m.ctx, 45*time.Second)
+			}
 			m.timelineCancel = cancel
 			m.startTimelineLoader(ctx, e.Generation, e.Ref)
 		case StartCommitDiffEffect:
@@ -214,8 +234,38 @@ func (m *model) applyEffects(effects []Effect) {
 			m.startReadStateLoader(e.Ref, e.EventIDs)
 		case PersistReadStateEffect:
 			m.startReadStatePersist(e.OpID, e.Ref, e.EventIDs, e.Read)
+		case ScheduleAutoRefreshTickEffect:
+			m.scheduleAutoRefreshTick()
+		case ScheduleRefreshSpinnerTickEffect:
+			m.scheduleRefreshSpinnerTick()
 		}
 	}
+}
+
+func (m *model) scheduleAutoRefreshTick() {
+	go func() {
+		timer := time.NewTimer(5 * time.Minute)
+		defer timer.Stop()
+		select {
+		case <-m.ctx.Done():
+			return
+		case <-timer.C:
+			m.msgCh <- autoRefreshTickMsg{}
+		}
+	}()
+}
+
+func (m *model) scheduleRefreshSpinnerTick() {
+	go func() {
+		timer := time.NewTimer(120 * time.Millisecond)
+		defer timer.Stop()
+		select {
+		case <-m.ctx.Done():
+			return
+		case <-timer.C:
+			m.msgCh <- refreshSpinnerTickMsg{}
+		}
+	}()
 }
 
 func (m *model) startReadStateLoader(ref string, eventIDs []string) {
@@ -299,9 +349,12 @@ func (m *model) startClipboardCopy(column, text string) {
 	}()
 }
 
-func (m *model) startNotificationsLoader(gen int) {
+func (m *model) startNotificationsLoader(ctx context.Context, cancel context.CancelFunc, gen int) {
 	go func() {
-		err := m.client.StreamNotifications(m.ctx, func(item ghpr.NotificationEvent) error {
+		if cancel != nil {
+			defer cancel()
+		}
+		err := m.client.StreamNotifications(ctx, func(item ghpr.NotificationEvent) error {
 			m.msgCh <- notifArrivedMsg{gen: gen, item: item}
 			return nil
 		})

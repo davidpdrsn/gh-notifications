@@ -60,7 +60,7 @@ func (m *model) View() string {
 		sep := m.verticalSeparator(panesInnerHeight)
 		row = lipgloss.JoinHorizontal(lipgloss.Top, panes[0], sep, panes[1])
 	}
-	status := m.styles.status.Width(m.state.Width).Render(" " + m.debugStatus())
+	status := m.styles.status.Width(m.state.Width).Render(" " + m.bottomStatus())
 	return lipgloss.JoinVertical(lipgloss.Left, row, status)
 }
 
@@ -258,21 +258,6 @@ func renderNotificationTimestamp(line string, width int, style lipgloss.Style) s
 		return line
 	}
 	return style.Render(prefix) + rest
-}
-
-func renderSelectedNotificationLine(selected lipgloss.Style, selectedMuted lipgloss.Style, line string, width int, timeWidth int) string {
-	if width < 1 {
-		width = 1
-	}
-	padded := padToDisplayWidth(line, width)
-	if timeWidth <= 0 {
-		return selected.Render(padded)
-	}
-	prefix, rest := splitAtDisplayWidth(padded, timeWidth)
-	if prefix == "" {
-		return selected.Render(padded)
-	}
-	return selectedMuted.Render(prefix) + selected.Render(rest)
 }
 
 func (m *model) renderNotificationStyledLine(line string, width int, timeWidth int, selected bool) string {
@@ -1130,21 +1115,6 @@ func sanitizeForRender(s string) string {
 		}
 		return r
 	}, s)
-}
-
-func renderSelectedLine(style lipgloss.Style, s string, width int) string {
-	if width < 1 {
-		width = 1
-	}
-	return style.Width(width).Render(padToDisplayWidth(s, width))
-}
-
-func renderSelectedLineWithBase(selected lipgloss.Style, base lipgloss.Style, s string, width int) string {
-	if width < 1 {
-		width = 1
-	}
-	padded := padToDisplayWidth(s, width)
-	return selected.Width(width).Render(base.Render(padded))
 }
 
 func padToDisplayWidth(s string, width int) string {

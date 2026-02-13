@@ -2,8 +2,10 @@ package tui
 
 import (
 	"gh-pr/ghpr"
+	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -102,6 +104,9 @@ type MouseWheelEvent struct {
 	Delta int
 }
 
+type AutoRefreshTickEvent struct{}
+type RefreshSpinnerTickEvent struct{}
+
 func (InitEvent) isEvent()                   {}
 func (WindowSizeEvent) isEvent()             {}
 func (KeyEvent) isEvent()                    {}
@@ -125,6 +130,8 @@ func (ClipboardCopiedEvent) isEvent()       {}
 func (ClipboardCopyFailedEvent) isEvent()   {}
 func (MouseClickEvent) isEvent()            {}
 func (MouseWheelEvent) isEvent()            {}
+func (AutoRefreshTickEvent) isEvent()       {}
+func (RefreshSpinnerTickEvent) isEvent()    {}
 
 type Effect interface{ isEffect() }
 
@@ -157,6 +164,8 @@ type PersistReadStateEffect struct {
 	EventIDs []string
 	Read     bool
 }
+type ScheduleAutoRefreshTickEffect struct{}
+type ScheduleRefreshSpinnerTickEffect struct{}
 
 func (StartNotificationsEffect) isEffect() {}
 func (StartTimelineEffect) isEffect()      {}
@@ -167,13 +176,22 @@ func (StartForcePushInterdiffEffect) isEffect() {
 func (CopyColumnEffect) isEffect()       {}
 func (LoadReadStateEffect) isEffect()    {}
 func (PersistReadStateEffect) isEffect() {}
+func (ScheduleAutoRefreshTickEffect) isEffect() {
+}
+func (ScheduleRefreshSpinnerTickEffect) isEffect() {
+}
 
 func Reduce(state AppState, ev Event) (AppState, []Effect) {
 	effects := make([]Effect, 0)
+	expectedTimelineRef := state.TimelineLoadingRef
+	if expectedTimelineRef == "" {
+		expectedTimelineRef = state.CurrentRef
+	}
 
 	switch e := ev.(type) {
 	case InitEvent:
 		effects = append(effects, StartNotificationsEffect{Generation: state.NotifGen})
+		effects = append(effects, ScheduleAutoRefreshTickEffect{})
 	case WindowSizeEvent:
 		state.Width = e.Width
 		state.Height = e.Height
@@ -242,14 +260,32 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 		case "r":
 			clearMotionCount(&state)
 			toggleSelectedRead(&state, &effects)
+		case "ctrl+r":
+			clearMotionCount(&state)
+			beginRefresh(&state, &effects)
 		default:
 			clearMotionCount(&state)
 		}
+	case AutoRefreshTickEvent:
+		effects = append(effects, ScheduleAutoRefreshTickEffect{})
+		if !state.RefreshInFlight {
+			beginRefresh(&state, &effects)
+		}
+	case RefreshSpinnerTickEvent:
+		if state.RefreshInFlight {
+			state.RefreshSpinnerIndex++
+			effects = append(effects, ScheduleRefreshSpinnerTickEffect{})
+		}
 	case NotificationsArrivedEvent:
 		if e.Generation == state.NotifGen {
+			if state.RefreshInFlight && state.RefreshStage == "notifications" {
+				insertRefreshNotification(&state, e.Item)
+				break
+			}
 			refChanged := state.insertNotification(e.Item)
 			if refChanged && state.CurrentRef != "" {
 				state.TimelineGen++
+				state.TimelineLoadingRef = state.CurrentRef
 				effects = append(effects,
 					CancelTimelineEffect{},
 					StartTimelineEffect{Generation: state.TimelineGen, Ref: state.CurrentRef},
@@ -263,16 +299,27 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 		}
 	case NotificationsDoneEvent:
 		if e.Generation == state.NotifGen {
+			if state.RefreshInFlight && state.RefreshStage == "notifications" {
+				commitRefreshNotifications(&state)
+				finishRefresh(&state, &effects)
+				break
+			}
 			state.NotifLoading = false
 			state.NotifDone = true
 		}
 	case NotificationsErrEvent:
 		if e.Generation == state.NotifGen {
+			if state.RefreshInFlight && state.RefreshStage == "notifications" {
+				state.NotifLoading = false
+				state.NotifErr = e.Err
+				finishRefresh(&state, &effects)
+				break
+			}
 			state.NotifLoading = false
 			state.NotifErr = e.Err
 		}
 	case TimelineArrivedEvent:
-		if e.Generation == state.TimelineGen && e.Ref == state.CurrentRef {
+		if e.Generation == state.TimelineGen && e.Ref == expectedTimelineRef {
 			ts := state.TimelineByRef[e.Ref]
 			if ts != nil {
 				ensureReadStateMaps(ts)
@@ -284,23 +331,41 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 			}
 		}
 	case TimelineWarnEvent:
-		if e.Generation == state.TimelineGen && e.Ref == state.CurrentRef {
-			state.Status = e.Message
+		if e.Generation == state.TimelineGen && e.Ref == expectedTimelineRef {
+			if shouldShowTimelineWarning(e.Message) {
+				state.Status = e.Message
+			}
 		}
 	case TimelineDoneEvent:
-		if e.Generation == state.TimelineGen && e.Ref == state.CurrentRef {
+		if e.Generation == state.TimelineGen && e.Ref == expectedTimelineRef {
 			ts := state.TimelineByRef[e.Ref]
 			if ts != nil {
 				ts.loading = false
 				ts.done = true
+				if state.RefreshInFlight && state.RefreshStage == "timeline" && state.RefreshActiveRef == e.Ref {
+					applyTimelineRefreshSelectionFallback(&state, ts, e.Ref)
+					startNextRefreshStep(&state, &effects)
+				}
+			}
+			if state.TimelineLoadingRef == e.Ref {
+				state.TimelineLoadingRef = ""
 			}
 		}
 	case TimelineErrEvent:
-		if e.Generation == state.TimelineGen && e.Ref == state.CurrentRef {
+		if e.Generation == state.TimelineGen && e.Ref == expectedTimelineRef {
 			ts := state.TimelineByRef[e.Ref]
 			if ts != nil {
 				ts.loading = false
 				ts.err = e.Err
+				if state.RefreshInFlight && state.RefreshStage == "timeline" && state.RefreshActiveRef == e.Ref {
+					if prev, ok := state.RefreshTimelinePrevByRef[e.Ref]; ok && prev != nil {
+						state.TimelineByRef[e.Ref] = prev
+					}
+					startNextRefreshStep(&state, &effects)
+				}
+			}
+			if state.TimelineLoadingRef == e.Ref {
+				state.TimelineLoadingRef = ""
 			}
 		}
 	case ReadStateLoadedEvent:
@@ -1357,6 +1422,12 @@ func selectNotificationByID(state *AppState, effects *[]Effect, id string) {
 	state.SelectedNotif = id
 	state.setCurrentRefFromSelectedNotification()
 	ensureNotificationSelectionVisible(state)
+	if state.RefreshInFlight {
+		if state.CurrentRef != "" {
+			ensureTimelineState(state, state.CurrentRef)
+		}
+		return
+	}
 	if state.CurrentRef != prevRef {
 		state.TimelineGen++
 		*effects = append(*effects, CancelTimelineEffect{})
@@ -1371,6 +1442,7 @@ func selectNotificationByID(state *AppState, effects *[]Effect, id string) {
 		if state.CurrentRef == prevRef {
 			state.TimelineGen++
 		}
+		state.TimelineLoadingRef = state.CurrentRef
 		*effects = append(*effects, StartTimelineEffect{Generation: state.TimelineGen, Ref: state.CurrentRef})
 		ts.loading = true
 		ts.done = false
@@ -1474,4 +1546,318 @@ func detailWrappedLineCount(state AppState, avail int) int {
 		return 1
 	}
 	return count
+}
+
+func beginRefresh(state *AppState, effects *[]Effect) {
+	if state.RefreshInFlight {
+		state.RefreshPending = true
+		return
+	}
+
+	state.RefreshInFlight = true
+	state.RefreshPending = false
+	state.RefreshStage = ""
+	state.RefreshQueue = refreshTimelineRefs(*state)
+	state.RefreshTotalRefs = len(state.RefreshQueue)
+	state.RefreshActiveRef = ""
+	state.RefreshSpinnerIndex = 0
+	state.RefreshNotifAnchorID = state.SelectedNotif
+	state.RefreshNotifAnchorIndex = state.NotifSelected
+	state.RefreshNotifBuffer = nil
+	if state.RefreshNotifSeen == nil {
+		state.RefreshNotifSeen = make(map[string]bool)
+	}
+	for k := range state.RefreshNotifSeen {
+		delete(state.RefreshNotifSeen, k)
+	}
+	if state.RefreshTimelinePrevByRef == nil {
+		state.RefreshTimelinePrevByRef = make(map[string]*timelineState)
+	}
+	if state.RefreshTimelineAnchorByRef == nil {
+		state.RefreshTimelineAnchorByRef = make(map[string]timelineRefreshAnchor)
+	}
+
+	*effects = append(*effects, ScheduleRefreshSpinnerTickEffect{})
+	startNextRefreshStep(state, effects)
+}
+
+func startNextRefreshStep(state *AppState, effects *[]Effect) {
+	if !state.RefreshInFlight {
+		return
+	}
+
+	if len(state.RefreshQueue) > 0 {
+		ref := state.RefreshQueue[0]
+		state.RefreshQueue = state.RefreshQueue[1:]
+		prepareTimelineRefresh(state, ref)
+		state.TimelineGen++
+		state.TimelineLoadingRef = ref
+		state.RefreshStage = "timeline"
+		state.RefreshActiveRef = ref
+		*effects = append(*effects, CancelTimelineEffect{}, StartTimelineEffect{Generation: state.TimelineGen, Ref: ref})
+		return
+	}
+
+	if state.RefreshStage != "notifications" {
+		state.RefreshStage = "notifications"
+		state.NotifGen++
+		state.NotifLoading = true
+		state.NotifDone = false
+		state.NotifErr = ""
+		state.RefreshNotifAnchorID = state.SelectedNotif
+		state.RefreshNotifAnchorIndex = state.NotifSelected
+		state.RefreshNotifBuffer = nil
+		for k := range state.RefreshNotifSeen {
+			delete(state.RefreshNotifSeen, k)
+		}
+		*effects = append(*effects, StartNotificationsEffect{Generation: state.NotifGen})
+		return
+	}
+
+	finishRefresh(state, effects)
+}
+
+func finishRefresh(state *AppState, effects *[]Effect) {
+	state.RefreshInFlight = false
+	state.RefreshStage = ""
+	state.RefreshQueue = nil
+	state.RefreshTotalRefs = 0
+	state.RefreshActiveRef = ""
+	state.LastRefreshAt = time.Now()
+	for k := range state.RefreshTimelinePrevByRef {
+		delete(state.RefreshTimelinePrevByRef, k)
+	}
+	for k := range state.RefreshTimelineAnchorByRef {
+		delete(state.RefreshTimelineAnchorByRef, k)
+	}
+
+	if state.RefreshPending {
+		state.RefreshPending = false
+		beginRefresh(state, effects)
+	}
+}
+
+func refreshTimelineRefs(state AppState) []string {
+	refs := make([]string, 0, len(state.TimelineByRef)+1)
+	seen := make(map[string]bool, len(state.TimelineByRef)+1)
+	if state.CurrentRef != "" {
+		refs = append(refs, state.CurrentRef)
+		seen[state.CurrentRef] = true
+	}
+	others := make([]string, 0, len(state.TimelineByRef))
+	for ref := range state.TimelineByRef {
+		if ref == "" || seen[ref] {
+			continue
+		}
+		others = append(others, ref)
+	}
+	sort.Strings(others)
+	refs = append(refs, others...)
+	return refs
+}
+
+func prepareTimelineRefresh(state *AppState, ref string) {
+	prev := state.TimelineByRef[ref]
+	anchor := timelineRefreshAnchor{}
+	if prev != nil {
+		anchor.selectedID = prev.selectedID
+		anchor.selectedIndex = prev.selectedIndex
+		anchor.activeThreadID = prev.activeThreadID
+		anchor.threadSelectedID = prev.threadSelectedID
+		anchor.threadSelectedIndex = prev.threadSelectedIndex
+	}
+	state.RefreshTimelineAnchorByRef[ref] = anchor
+	state.RefreshTimelinePrevByRef[ref] = prev
+
+	next := &timelineState{
+		ref:                ref,
+		rowIndexByID:       make(map[string]int),
+		threadByID:         make(map[string]*threadGroup),
+		expandedThreads:    make(map[string]bool),
+		readByEventID:      make(map[string]bool),
+		readKnownByEventID: make(map[string]bool),
+		readLoadInFlight:   make(map[string]bool),
+		commitDiffByID:     make(map[string]commitDiffState),
+		forcePushByID:      make(map[string]forcePushDiffState),
+		loading:            true,
+		done:               false,
+		err:                "",
+	}
+	if prev != nil {
+		next.readByEventID = copyBoolMap(prev.readByEventID)
+		next.readKnownByEventID = copyBoolMap(prev.readKnownByEventID)
+		next.selectedID = prev.selectedID
+		next.selectedIndex = prev.selectedIndex
+		next.scrollOffset = prev.scrollOffset
+		next.activeThreadID = prev.activeThreadID
+		next.threadSelectedID = prev.threadSelectedID
+		next.threadSelectedIndex = prev.threadSelectedIndex
+		next.threadScrollOffset = prev.threadScrollOffset
+	}
+	state.TimelineByRef[ref] = next
+}
+
+func copyBoolMap(src map[string]bool) map[string]bool {
+	if len(src) == 0 {
+		return make(map[string]bool)
+	}
+	out := make(map[string]bool, len(src))
+	for k, v := range src {
+		out[k] = v
+	}
+	return out
+}
+
+func insertRefreshNotification(state *AppState, item ghpr.NotificationEvent) {
+	if state.RefreshNotifSeen[item.ID] {
+		return
+	}
+	state.RefreshNotifSeen[item.ID] = true
+	row := notifRow{
+		id:        item.ID,
+		updatedAt: item.UpdatedAt,
+		title:     item.Subject.Title,
+		repo:      item.Repository.Owner + "/" + item.Repository.Repo,
+		kind:      item.Target.Kind,
+		ref:       item.Target.Ref,
+	}
+	idx := sort.Search(len(state.RefreshNotifBuffer), func(i int) bool {
+		return notifComesBefore(row, state.RefreshNotifBuffer[i])
+	})
+	state.RefreshNotifBuffer = append(state.RefreshNotifBuffer, notifRow{})
+	copy(state.RefreshNotifBuffer[idx+1:], state.RefreshNotifBuffer[idx:])
+	state.RefreshNotifBuffer[idx] = row
+}
+
+func commitRefreshNotifications(state *AppState) {
+	state.Notifications = append([]notifRow(nil), state.RefreshNotifBuffer...)
+	state.rebuildNotifIndex()
+	state.NotifLoading = false
+	state.NotifDone = true
+	state.NotifErr = ""
+
+	visible := state.visibleNotifications()
+	if len(visible) == 0 {
+		state.SelectedNotif = ""
+		state.NotifSelected = 0
+		state.CurrentRef = ""
+		return
+	}
+
+	idx := indexOfNotificationByID(visible, state.RefreshNotifAnchorID)
+	if idx < 0 {
+		idx = state.RefreshNotifAnchorIndex
+		if idx < 0 {
+			idx = 0
+		}
+		if idx >= len(visible) {
+			idx = len(visible) - 1
+		}
+	}
+	state.NotifSelected = idx
+	state.SelectedNotif = visible[idx].id
+	state.setCurrentRefFromSelectedNotification()
+}
+
+func applyTimelineRefreshSelectionFallback(state *AppState, ts *timelineState, ref string) {
+	if ts == nil {
+		return
+	}
+	anchor, ok := state.RefreshTimelineAnchorByRef[ref]
+	if !ok {
+		return
+	}
+	rows := ts.displayRows(state.HideRead)
+	if len(rows) == 0 {
+		ts.selectedID = ""
+		ts.selectedIndex = 0
+		ts.activeThreadID = ""
+		ts.threadSelectedID = ""
+		ts.threadSelectedIndex = 0
+		return
+	}
+
+	idx := indexOfTimelineRowByID(rows, anchor.selectedID)
+	if idx < 0 {
+		idx = anchor.selectedIndex
+		if idx < 0 {
+			idx = 0
+		}
+		if idx >= len(rows) {
+			idx = len(rows) - 1
+		}
+	}
+	ts.selectedID = rows[idx].id
+	ts.selectedIndex = idx
+
+	if anchor.activeThreadID == "" {
+		ts.activeThreadID = ""
+		ts.threadSelectedID = ""
+		ts.threadSelectedIndex = 0
+		return
+	}
+	if ts.threadByID[anchor.activeThreadID] == nil {
+		ts.activeThreadID = ""
+		ts.threadSelectedID = ""
+		ts.threadSelectedIndex = 0
+		return
+	}
+	ts.activeThreadID = anchor.activeThreadID
+	threadRows := ts.threadRows(ts.activeThreadID, state.HideRead)
+	if len(threadRows) == 0 {
+		ts.activeThreadID = ""
+		ts.threadSelectedID = ""
+		ts.threadSelectedIndex = 0
+		return
+	}
+	tIdx := indexOfThreadRowByID(threadRows, anchor.threadSelectedID)
+	if tIdx < 0 {
+		tIdx = anchor.threadSelectedIndex
+		if tIdx < 0 {
+			tIdx = 0
+		}
+		if tIdx >= len(threadRows) {
+			tIdx = len(threadRows) - 1
+		}
+	}
+	ts.threadSelectedID = threadRows[tIdx].id
+	ts.threadSelectedIndex = tIdx
+}
+
+func indexOfTimelineRowByID(rows []displayTimelineRow, id string) int {
+	if id == "" {
+		return -1
+	}
+	for i := range rows {
+		if rows[i].id == id {
+			return i
+		}
+	}
+	return -1
+}
+
+func indexOfThreadRowByID(rows []displayTimelineRow, id string) int {
+	if id == "" {
+		return -1
+	}
+	for i := range rows {
+		if rows[i].id == id {
+			return i
+		}
+	}
+	return -1
+}
+
+func shouldShowTimelineWarning(msg string) bool {
+	msg = strings.TrimSpace(msg)
+	if msg == "" {
+		return false
+	}
+	if strings.HasPrefix(msg, "warning: skipping unknown timeline event ") {
+		return false
+	}
+	if strings.HasPrefix(msg, "warning: skipping timeline event;") {
+		return false
+	}
+	return true
 }

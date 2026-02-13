@@ -309,7 +309,7 @@ func TestViewLinesDoNotExceedTerminalWidth(t *testing.T) {
 
 func TestViewLinesDoNotOverflowWithWideUnicode(t *testing.T) {
 	m := newModel(context.Background(), nil, nil)
-	m.state.Width = 72
+	m.state.Width = 120
 	m.state.Height = 18
 	m.state.Focus = focusDetail
 	m.state.Notifications = []notifRow{{
@@ -586,7 +586,7 @@ func TestWrapThreadRowUsesHangingIndentForReplies(t *testing.T) {
 	ts := &timelineState{
 		expandedThreads: map[string]bool{},
 		threadByID: map[string]*threadGroup{
-			threadID: &threadGroup{
+			threadID: {
 				id: threadID,
 				items: []ghpr.TimelineEvent{
 					{Actor: &ghpr.Actor{Login: "KaffeDiem"}},
@@ -1085,5 +1085,52 @@ func TestRenderDetailHighlightsMentionsForCommentEvents(t *testing.T) {
 	}
 	if !strings.Contains(out, "@alice") {
 		t.Fatalf("expected mention text in detail output, got %q", out)
+	}
+}
+
+func TestBottomBarShowsRefreshSpinnerWhenRefreshing(t *testing.T) {
+	m := newModel(context.Background(), nil, nil)
+	m.state.Width = 80
+	m.state.Height = 10
+	m.state.RefreshInFlight = true
+	m.state.RefreshSpinnerIndex = 2
+	m.state.RefreshStage = "timeline"
+	m.state.RefreshActiveRef = "owner/repo#2"
+	m.state.RefreshQueue = []string{"owner/repo#3"}
+	m.state.RefreshTotalRefs = 3
+
+	out := m.View()
+	if !strings.Contains(out, "refresh | 2/3") {
+		t.Fatalf("expected refresh spinner in bottom bar, got %q", out)
+	}
+}
+
+func TestBottomBarShowsLastRefreshTimeWhenIdle(t *testing.T) {
+	m := newModel(context.Background(), nil, nil)
+	m.state.Width = 80
+	m.state.Height = 10
+	m.state.LastRefreshAt = time.Date(2026, 2, 13, 14, 5, 6, 0, time.Local)
+
+	out := m.View()
+	if !strings.Contains(out, "last refresh 14:05:06") {
+		t.Fatalf("expected last refresh time in bottom bar, got %q", out)
+	}
+}
+
+func TestBottomBarRightAlignsRefreshSegment(t *testing.T) {
+	m := newModel(context.Background(), nil, nil)
+	m.state.Width = 72
+	m.state.Height = 10
+	m.state.LastRefreshAt = time.Date(2026, 2, 13, 14, 5, 6, 0, time.Local)
+
+	out := m.View()
+	lastLine := out
+	if idx := strings.LastIndex(out, "\n"); idx >= 0 {
+		lastLine = out[idx+1:]
+	}
+	ansi := regexp.MustCompile(`\x1b\[[0-9;]*m`)
+	plain := strings.TrimRight(ansi.ReplaceAllString(lastLine, ""), " ")
+	if !strings.HasSuffix(plain, "last refresh 14:05:06") {
+		t.Fatalf("expected right-aligned refresh segment at end, got %q", plain)
 	}
 }
