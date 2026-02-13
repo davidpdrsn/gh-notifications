@@ -17,7 +17,7 @@ func buildTimelineViewportPlan(ts *timelineState, width int, viewport int, hideR
 	plan := timelineViewportPlan{
 		start:    0,
 		selected: 0,
-		avail:    contentWidth(width),
+		avail:    paneContentWidthWithRelativeNumbers(width, viewport),
 		rows:     nil,
 	}
 	if plan.avail < 1 {

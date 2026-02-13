@@ -85,16 +85,22 @@ func (m *model) verticalSeparator(height int) string {
 
 func (m *model) renderNotifications(width, height int) string {
 	lines := make([]string, 0, max(1, height))
+	rowIndexByLine := make([]int, 0, max(1, height))
+	selectedRow := -1
 	lines = append(lines, m.renderNotificationTabs(contentWidth(width)))
+	rowIndexByLine = append(rowIndexByLine, -1)
 	if m.state.NotifLoading {
 		lines = append(lines, m.styles.muted.Render("loading..."))
+		rowIndexByLine = append(rowIndexByLine, -1)
 	}
 	if m.state.NotifErr != "" {
 		lines = append(lines, m.styles.error.Render("error: "+m.state.NotifErr))
+		rowIndexByLine = append(rowIndexByLine, -1)
 	}
 	visible := m.state.visibleNotifications()
 	if len(visible) == 0 && !m.state.NotifLoading && m.state.NotifErr == "" {
 		lines = append(lines, m.styles.muted.Render("no notifications"))
+		rowIndexByLine = append(rowIndexByLine, -1)
 	}
 
 	selected := m.state.NotifSelected
@@ -111,7 +117,7 @@ func (m *model) renderNotifications(width, height int) string {
 		prefix := marker + padToDisplayWidth(timeAgo(n.updatedAt), timeColWidth) + " "
 		repo := padToDisplayWidth(clampDisplayWidth(oneLine(n.repo), repoColWidth), repoColWidth)
 		label := prefix + repo + "  " + oneLine(n.title)
-		avail := contentWidth(width)
+		avail := paneContentWidthWithRelativeNumbers(width, height)
 		if avail < 1 {
 			avail = 1
 		}
@@ -127,15 +133,21 @@ func (m *model) renderNotifications(width, height int) string {
 		titleIndent := strings.Repeat(" ", indentWidth)
 		wrapped := wrapDisplayWidth(label, avail, titleIndent)
 		if i == selected {
+			selectedRow = i
+		}
+		if i == selected {
 			for _, seg := range wrapped {
-				lines = append(lines, m.renderNotificationStyledLine(seg, avail, timeColWidth+3, true))
+				lines = append(lines, m.renderNotificationStyledLine(seg, avail, timeColWidth+5, true))
+				rowIndexByLine = append(rowIndexByLine, i)
 			}
 		} else {
 			for _, seg := range wrapped {
-				lines = append(lines, m.renderNotificationStyledLine(seg, avail, timeColWidth+3, false))
+				lines = append(lines, m.renderNotificationStyledLine(seg, avail, timeColWidth+5, false))
+				rowIndexByLine = append(rowIndexByLine, i)
 			}
 		}
 	}
+	lines = m.applyRelativeLineNumbers(lines, rowIndexByLine, selectedRow, height)
 
 	innerW := paneInnerWidth(width)
 	pane := lipgloss.NewStyle().Width(innerW).Height(height).Render(fitPaneLines(lines, height, contentWidth(width)))
@@ -287,16 +299,21 @@ func (m *model) renderNotificationStyledLine(line string, width int, timeWidth i
 
 func (m *model) renderTimeline(width, height int) string {
 	lines := make([]string, 0, max(1, height))
+	rowIndexByLine := make([]int, 0, max(1, height))
+	selectedRow := -1
 	highlightSelection := m.state.Focus == focusTimeline
 	ts := m.state.currentTimeline()
 	if ts == nil {
 		lines = append(lines, m.styles.muted.Render("select a notification"))
+		rowIndexByLine = append(rowIndexByLine, -1)
 	} else {
 		if ts.loading {
 			lines = append(lines, m.styles.muted.Render("loading..."))
+			rowIndexByLine = append(rowIndexByLine, -1)
 		}
 		if ts.err != "" {
 			lines = append(lines, m.styles.error.Render("error: "+ts.err))
+			rowIndexByLine = append(rowIndexByLine, -1)
 		}
 		allRows := ts.displayRows(m.state.HideRead)
 		rows := ts.rowsReadyForDisplay(allRows)
@@ -304,13 +321,17 @@ func (m *model) renderTimeline(width, height int) string {
 		if len(rows) == 0 && !ts.loading && ts.err == "" {
 			if pendingReadState {
 				lines = append(lines, m.styles.muted.Render("loading read state..."))
+				rowIndexByLine = append(rowIndexByLine, -1)
 			} else if m.state.HideRead {
 				lines = append(lines, m.styles.muted.Render("all events are read"))
+				rowIndexByLine = append(rowIndexByLine, -1)
 			} else {
 				lines = append(lines, m.styles.muted.Render("no timeline events"))
+				rowIndexByLine = append(rowIndexByLine, -1)
 			}
 		}
 		plan := buildTimelineViewportPlan(ts, width, max(1, height-2), m.state.HideRead)
+		selectedRow = plan.selected
 		kindWidth := timelineKindColumnWidth(rows)
 		for _, row := range plan.rows {
 			isRead := ts.rowRead(rows[row.index])
@@ -319,15 +340,18 @@ func (m *model) renderTimeline(width, height int) string {
 				style := m.styleForTimelineRow(ts, rows[row.index])
 				for _, seg := range wrapped {
 					lines = append(lines, m.renderTimelineStyledLine(style, seg, plan.avail, true, kindWidth, isRead))
+					rowIndexByLine = append(rowIndexByLine, row.index)
 				}
 			} else {
 				style := m.styleForTimelineRow(ts, rows[row.index])
 				for _, seg := range row.lines {
 					lines = append(lines, m.renderTimelineStyledLine(style, seg, plan.avail, false, kindWidth, isRead))
+					rowIndexByLine = append(rowIndexByLine, row.index)
 				}
 			}
 		}
 	}
+	lines = m.applyRelativeLineNumbers(lines, rowIndexByLine, selectedRow, height)
 
 	innerW := paneInnerWidth(width)
 	pane := lipgloss.NewStyle().Width(innerW).Height(height).Render(fitPaneLines(lines, height, contentWidth(width)))
@@ -336,10 +360,13 @@ func (m *model) renderTimeline(width, height int) string {
 
 func (m *model) renderThread(width, height int) string {
 	lines := make([]string, 0, max(1, height))
+	rowIndexByLine := make([]int, 0, max(1, height))
+	selectedRow := -1
 	highlightSelection := m.state.Focus == focusThread
 	ts := m.state.currentTimeline()
 	if ts == nil || ts.activeThreadID == "" {
 		lines = append(lines, m.styles.muted.Render("no thread selected"))
+		rowIndexByLine = append(rowIndexByLine, -1)
 	} else {
 		allRows := ts.threadRows(ts.activeThreadID, m.state.HideRead)
 		rows := ts.rowsReadyForDisplay(allRows)
@@ -347,13 +374,16 @@ func (m *model) renderThread(width, height int) string {
 		if len(rows) == 0 {
 			if pendingReadState {
 				lines = append(lines, m.styles.muted.Render("loading read state..."))
+				rowIndexByLine = append(rowIndexByLine, -1)
 			} else if m.state.HideRead {
 				lines = append(lines, m.styles.muted.Render("all thread events are read"))
+				rowIndexByLine = append(rowIndexByLine, -1)
 			} else {
 				lines = append(lines, m.styles.muted.Render("no replies"))
+				rowIndexByLine = append(rowIndexByLine, -1)
 			}
 		} else {
-			avail := contentWidth(width)
+			avail := paneContentWidthWithRelativeNumbers(width, height)
 			if avail < 1 {
 				avail = 1
 			}
@@ -368,20 +398,26 @@ func (m *model) renderThread(width, height int) string {
 			for i := start; i < len(rows); i++ {
 				wrapped := wrapThreadRow(rows[i], ts, avail, actorWidth)
 				isRead := ts.rowRead(rows[i])
+				if i == ts.threadSelectedIndex {
+					selectedRow = i
+				}
 				if highlightSelection && i == ts.threadSelectedIndex {
 					style := m.styleForTimelineRow(ts, rows[i])
 					for _, seg := range wrapped {
 						lines = append(lines, m.renderTimelineStyledLine(style, seg, avail, true, 0, isRead))
+						rowIndexByLine = append(rowIndexByLine, i)
 					}
 				} else {
 					style := m.styleForTimelineRow(ts, rows[i])
 					for _, seg := range wrapped {
 						lines = append(lines, m.renderTimelineStyledLine(style, seg, avail, false, 0, isRead))
+						rowIndexByLine = append(rowIndexByLine, i)
 					}
 				}
 			}
 		}
 	}
+	lines = m.applyRelativeLineNumbers(lines, rowIndexByLine, selectedRow, height)
 
 	innerW := paneInnerWidth(width)
 	pane := lipgloss.NewStyle().Width(innerW).Height(height).Render(fitPaneLines(lines, height, contentWidth(width)))
@@ -570,6 +606,75 @@ func paneInnerWidth(outerWidth int) int {
 		return 1
 	}
 	return w
+}
+
+func relativeLineNumberGutterWidth(maxLines int) int {
+	if maxLines < 1 {
+		maxLines = 1
+	}
+	digits := len(fmt.Sprintf("%d", maxLines-1))
+	if digits < 1 {
+		digits = 1
+	}
+	return digits + 1
+}
+
+func paneContentWidthWithRelativeNumbers(outerWidth int, maxLines int) int {
+	w := contentWidth(outerWidth) - relativeLineNumberGutterWidth(maxLines)
+	if w < 1 {
+		return 1
+	}
+	return w
+}
+
+func (m *model) applyRelativeLineNumbers(lines []string, rowIndexByLine []int, selectedRow int, maxLines int) []string {
+	if len(lines) == 0 {
+		return lines
+	}
+	if len(rowIndexByLine) != len(lines) {
+		return lines
+	}
+	if selectedRow < 0 {
+		for _, row := range rowIndexByLine {
+			if row >= 0 {
+				selectedRow = row
+				break
+			}
+		}
+	}
+	if selectedRow < 0 {
+		return lines
+	}
+	gutterWidth := relativeLineNumberGutterWidth(maxLines)
+	digits := gutterWidth - 1
+	out := make([]string, 0, len(lines))
+	prevRow := -2
+	for i, line := range lines {
+		row := rowIndexByLine[i]
+		if row < 0 {
+			out = append(out, line)
+			prevRow = -2
+			continue
+		}
+		if row == prevRow {
+			blank := strings.Repeat(" ", digits) + " "
+			out = append(out, m.styles.lineNumber.Render(blank)+line)
+			continue
+		}
+		n := row - selectedRow
+		if n < 0 {
+			n = -n
+		}
+		label := padToDisplayWidth(fmt.Sprintf("%d", n), digits) + " "
+		if row == selectedRow {
+			out = append(out, m.styles.lineNumberZero.Render(label)+line)
+			prevRow = row
+			continue
+		}
+		out = append(out, m.styles.lineNumber.Render(label)+line)
+		prevRow = row
+	}
+	return out
 }
 
 func panesTotalWidth(totalWidth int, focus focusColumn, mode paneMode) int {
@@ -809,7 +914,7 @@ func splitAtExactDisplayWidth(s string, maxWidth int) (string, string) {
 }
 
 func splitUnreadMarkerPrefix(s string) (string, string, bool) {
-	for _, marker := range []string{"● ", "◐ "} {
+	for _, marker := range []string{" ●  ", " ◐  ", "● ", "◐ "} {
 		if strings.HasPrefix(s, marker) {
 			return marker, strings.TrimPrefix(s, marker), true
 		}
@@ -874,7 +979,7 @@ func timelineContinuationIndent(row displayTimelineRow, prefix string, messageOf
 }
 
 func timelineRowPrefixAndContent(row displayTimelineRow, ts *timelineState, kindWidth int, actorWidth int) (string, string, int) {
-	marker := "● "
+	marker := " ●  "
 	if ts != nil {
 		marker = ts.rowUnreadMarker(row)
 	}
@@ -956,7 +1061,7 @@ func wrapThreadRow(row displayTimelineRow, ts *timelineState, maxWidth int, acto
 		message = truncatePreview(eventPreviewText(*row.event), 96)
 	}
 	content, messageOffset := formatThreadChildColumns(actorWidth, actor, message)
-	prefix := "● "
+	prefix := " ●  "
 	if ts != nil {
 		prefix = ts.rowUnreadMarker(row)
 	}

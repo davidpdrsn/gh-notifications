@@ -47,6 +47,8 @@ type styles struct {
 	diffHunk       lipgloss.Style
 	diffAdd        lipgloss.Style
 	diffDel        lipgloss.Style
+	lineNumber     lipgloss.Style
+	lineNumberZero lipgloss.Style
 }
 
 func newModel(ctx context.Context, client *ghpr.Client, store *readstate.Store) *model {
@@ -85,6 +87,12 @@ func newModel(ctx context.Context, client *ghpr.Client, store *readstate.Store) 
 			diffHunk:       lipgloss.NewStyle().Foreground(t.warning),
 			diffAdd:        lipgloss.NewStyle().Foreground(t.success),
 			diffDel:        lipgloss.NewStyle().Foreground(t.danger),
+			lineNumber: lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#8A8FA8")).
+				Background(lipgloss.Color("#2B2F45")),
+			lineNumberZero: lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#C7CCE5")).
+				Background(lipgloss.Color("#3A3F5A")),
 		},
 	}
 }

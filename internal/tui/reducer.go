@@ -2,6 +2,7 @@ package tui
 
 import (
 	"gh-pr/ghpr"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -181,32 +182,44 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 	case MouseClickEvent:
 		return handleMouseClick(&state, &effects, e), effects
 	case KeyEvent:
+		if appendMotionCount(&state, e.Key) {
+			break
+		}
+		count := consumeMotionCount(&state)
 		switch e.Key {
 		case "ctrl+c", "q":
+			clearMotionCount(&state)
 			state.Quit = true
 			effects = append(effects, CancelTimelineEffect{})
 		case "tab":
+			clearMotionCount(&state)
 			if state.Focus == focusNotifications {
 				cycleNotificationTab(&state, &effects, +1)
 			}
 		case "shift+tab":
+			clearMotionCount(&state)
 			if state.Focus == focusNotifications {
 				cycleNotificationTab(&state, &effects, -1)
 			}
 		case "ctrl+n":
+			clearMotionCount(&state)
 			state.DetailScroll++
 		case "ctrl+p":
+			clearMotionCount(&state)
 			if state.DetailScroll > 0 {
 				state.DetailScroll--
 			}
 		case "ctrl+d":
+			clearMotionCount(&state)
 			state.DetailScroll += 10
 		case "ctrl+u":
+			clearMotionCount(&state)
 			state.DetailScroll -= 10
 			if state.DetailScroll < 0 {
 				state.DetailScroll = 0
 			}
 		case "C", "shift+c":
+			clearMotionCount(&state)
 			column, text := columnCopyText(state)
 			if strings.TrimSpace(text) == "" {
 				state.Status = "nothing to copy"
@@ -214,17 +227,23 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 			}
 			effects = append(effects, CopyColumnEffect{Column: column, Text: text})
 		case "down", "j":
-			moveDown(&state, &effects)
+			moveDownN(&state, &effects, count)
 		case "up", "k":
-			moveUp(&state, &effects)
+			moveUpN(&state, &effects, count)
 		case "right", "l", "enter":
+			clearMotionCount(&state)
 			drillIn(&state)
 		case "left", "h", "backspace":
+			clearMotionCount(&state)
 			backOut(&state)
 		case "H":
+			clearMotionCount(&state)
 			state.HideRead = !state.HideRead
 		case "r":
+			clearMotionCount(&state)
 			toggleSelectedRead(&state, &effects)
+		default:
+			clearMotionCount(&state)
 		}
 	case NotificationsArrivedEvent:
 		if e.Generation == state.NotifGen {
@@ -575,7 +594,7 @@ func toggleSelectedRead(state *AppState, effects *[]Effect) {
 			}
 		}
 	case focusTimeline:
-		rows := ts.displayRows(state.HideRead)
+		rows := ts.rowsReadyForDisplay(ts.displayRows(state.HideRead))
 		if len(rows) == 0 {
 			return
 		}
@@ -594,7 +613,7 @@ func toggleSelectedRead(state *AppState, effects *[]Effect) {
 			return
 		}
 		inThread = true
-		rows := ts.threadRows(ts.activeThreadID, state.HideRead)
+		rows := ts.rowsReadyForDisplay(ts.threadRows(ts.activeThreadID, state.HideRead))
 		if len(rows) == 0 {
 			return
 		}
@@ -611,7 +630,7 @@ func toggleSelectedRead(state *AppState, effects *[]Effect) {
 	case focusDetail:
 		if ts.activeThreadID != "" {
 			inThread = true
-			rows := ts.threadRows(ts.activeThreadID, state.HideRead)
+			rows := ts.rowsReadyForDisplay(ts.threadRows(ts.activeThreadID, state.HideRead))
 			if len(rows) == 0 {
 				return
 			}
@@ -627,7 +646,7 @@ func toggleSelectedRead(state *AppState, effects *[]Effect) {
 			}
 			break
 		}
-		rows := ts.displayRows(state.HideRead)
+		rows := ts.rowsReadyForDisplay(ts.displayRows(state.HideRead))
 		if len(rows) == 0 {
 			return
 		}
@@ -696,6 +715,54 @@ func toggleSelectedRead(state *AppState, effects *[]Effect) {
 	}
 }
 
+func appendMotionCount(state *AppState, key string) bool {
+	if len(key) != 1 || key[0] < '0' || key[0] > '9' {
+		return false
+	}
+	if key == "0" && state.MotionCount == "" {
+		return false
+	}
+	state.MotionCount += key
+	return true
+}
+
+func consumeMotionCount(state *AppState) int {
+	if state.MotionCount == "" {
+		return 1
+	}
+	v, err := strconv.Atoi(state.MotionCount)
+	state.MotionCount = ""
+	if err != nil || v < 1 {
+		return 1
+	}
+	if v > 10000 {
+		return 10000
+	}
+	return v
+}
+
+func clearMotionCount(state *AppState) {
+	state.MotionCount = ""
+}
+
+func moveDownN(state *AppState, effects *[]Effect, n int) {
+	if n < 1 {
+		n = 1
+	}
+	for i := 0; i < n; i++ {
+		moveDown(state, effects)
+	}
+}
+
+func moveUpN(state *AppState, effects *[]Effect, n int) {
+	if n < 1 {
+		n = 1
+	}
+	for i := 0; i < n; i++ {
+		moveUp(state, effects)
+	}
+}
+
 func moveDown(state *AppState, effects *[]Effect) {
 	switch state.Focus {
 	case focusNotifications:
@@ -713,7 +780,7 @@ func moveDown(state *AppState, effects *[]Effect) {
 		if ts == nil {
 			return
 		}
-		rows := ts.displayRows(state.HideRead)
+		rows := ts.rowsReadyForDisplay(ts.displayRows(state.HideRead))
 		if len(rows) == 0 {
 			return
 		}
@@ -729,7 +796,7 @@ func moveDown(state *AppState, effects *[]Effect) {
 		if ts == nil || ts.activeThreadID == "" {
 			return
 		}
-		rows := ts.threadRows(ts.activeThreadID, state.HideRead)
+		rows := ts.rowsReadyForDisplay(ts.threadRows(ts.activeThreadID, state.HideRead))
 		if len(rows) == 0 {
 			return
 		}
@@ -749,7 +816,7 @@ func moveDown(state *AppState, effects *[]Effect) {
 			return
 		}
 		if ts.activeThreadID != "" {
-			rows := ts.threadRows(ts.activeThreadID, state.HideRead)
+			rows := ts.rowsReadyForDisplay(ts.threadRows(ts.activeThreadID, state.HideRead))
 			if len(rows) == 0 {
 				return
 			}
@@ -765,7 +832,7 @@ func moveDown(state *AppState, effects *[]Effect) {
 			}
 			return
 		}
-		rows := ts.displayRows(state.HideRead)
+		rows := ts.rowsReadyForDisplay(ts.displayRows(state.HideRead))
 		if len(rows) == 0 {
 			return
 		}
@@ -796,7 +863,7 @@ func moveUp(state *AppState, effects *[]Effect) {
 		if ts == nil {
 			return
 		}
-		rows := ts.displayRows(state.HideRead)
+		rows := ts.rowsReadyForDisplay(ts.displayRows(state.HideRead))
 		if len(rows) == 0 {
 			return
 		}
@@ -874,7 +941,7 @@ func drillIn(state *AppState) {
 		if row.isThreadHeader {
 			ts.activeThreadID = row.threadID
 			ts.threadScrollOffset = 0
-			threadRows := ts.threadRows(row.threadID, state.HideRead)
+			threadRows := ts.rowsReadyForDisplay(ts.threadRows(row.threadID, state.HideRead))
 			if len(threadRows) > 0 {
 				ts.threadSelectedID = threadRows[0].id
 				ts.threadSelectedIndex = 0
@@ -893,7 +960,7 @@ func drillIn(state *AppState) {
 		if ts == nil || ts.activeThreadID == "" {
 			return
 		}
-		if len(ts.threadRows(ts.activeThreadID, state.HideRead)) == 0 {
+		if len(ts.rowsReadyForDisplay(ts.threadRows(ts.activeThreadID, state.HideRead))) == 0 {
 			return
 		}
 		state.Focus = focusDetail
@@ -982,7 +1049,7 @@ func ensureNotificationSelectionVisible(state *AppState) {
 	viewport := notificationViewportRows(*state)
 	mode := state.currentPaneMode()
 	leftW, _, _ := paneWidths(panesTotalWidth(state.Width, state.Focus, mode), state.Focus, mode)
-	avail := contentWidth(leftW)
+	avail := paneContentWidthWithRelativeNumbers(leftW, viewport)
 	if avail < 1 {
 		avail = 1
 	}
@@ -1017,7 +1084,7 @@ func clampNotificationScroll(state *AppState) {
 }
 
 func normalizeTimeline(state *AppState, ts *timelineState) {
-	rows := ts.displayRows(state.HideRead)
+	rows := ts.rowsReadyForDisplay(ts.displayRows(state.HideRead))
 	if len(rows) == 0 {
 		ts.selectedID = ""
 		ts.selectedIndex = 0
@@ -1045,7 +1112,7 @@ func normalizeTimeline(state *AppState, ts *timelineState) {
 }
 
 func ensureTimelineSelectionVisible(state *AppState, ts *timelineState) {
-	rows := ts.displayRows(state.HideRead)
+	rows := ts.rowsReadyForDisplay(ts.displayRows(state.HideRead))
 	if len(rows) == 0 {
 		return
 	}
@@ -1069,7 +1136,7 @@ func normalizeThread(state *AppState, ts *timelineState) {
 		}
 		return
 	}
-	rows := ts.threadRows(ts.activeThreadID, state.HideRead)
+	rows := ts.rowsReadyForDisplay(ts.threadRows(ts.activeThreadID, state.HideRead))
 	if len(rows) == 0 {
 		ts.threadSelectedID = ""
 		ts.threadSelectedIndex = 0
@@ -1104,7 +1171,7 @@ func normalizeThread(state *AppState, ts *timelineState) {
 		return
 	}
 	// If the timeline selection is no longer this active thread root, pop thread drill mode.
-	timelineRows := ts.displayRows(state.HideRead)
+	timelineRows := ts.rowsReadyForDisplay(ts.displayRows(state.HideRead))
 	tIdx := indexOfTimelineSelection(timelineRows, ts.selectedID)
 	if tIdx < 0 || tIdx >= len(timelineRows) {
 		ts.activeThreadID = ""
@@ -1132,7 +1199,7 @@ func ensureThreadSelectionVisible(state *AppState, ts *timelineState) {
 	if ts == nil || ts.activeThreadID == "" {
 		return
 	}
-	rows := ts.threadRows(ts.activeThreadID, state.HideRead)
+	rows := ts.rowsReadyForDisplay(ts.threadRows(ts.activeThreadID, state.HideRead))
 	if len(rows) == 0 {
 		ts.threadScrollOffset = 0
 		return
@@ -1146,7 +1213,7 @@ func ensureThreadSelectionVisible(state *AppState, ts *timelineState) {
 	viewport := timelineViewportRows(*state)
 	mode := state.currentPaneMode()
 	_, midW, _ := paneWidths(panesTotalWidth(state.Width, state.Focus, mode), state.Focus, mode)
-	avail := contentWidth(midW)
+	avail := paneContentWidthWithRelativeNumbers(midW, viewport)
 	if avail < 1 {
 		avail = 1
 	}
@@ -1160,7 +1227,7 @@ func ensureThreadSelectionVisible(state *AppState, ts *timelineState) {
 }
 
 func clampTimelineScroll(ts *timelineState, hideRead bool) {
-	maxScroll := len(ts.displayRows(hideRead)) - 1
+	maxScroll := len(ts.rowsReadyForDisplay(ts.displayRows(hideRead))) - 1
 	if maxScroll < 0 {
 		ts.scrollOffset = 0
 		return

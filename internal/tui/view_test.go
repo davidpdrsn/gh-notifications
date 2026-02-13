@@ -445,7 +445,7 @@ func TestWrapNotificationsAlignsWrappedTitleUnderTitleColumn(t *testing.T) {
 	}
 	firstIdx := -1
 	for i, line := range lines {
-		if strings.Contains(line, "Fix TextEditor") {
+		if strings.Contains(line, "Fix") {
 			firstIdx = i
 			break
 		}
@@ -459,7 +459,10 @@ func TestWrapNotificationsAlignsWrappedTitleUnderTitleColumn(t *testing.T) {
 	ansi := regexp.MustCompile(`\x1b\[[0-9;]*m`)
 	first = ansi.ReplaceAllString(first, "")
 	second = ansi.ReplaceAllString(second, "")
-	firstTitleIdx := strings.Index(first, "Fix TextEditor")
+	gutter := regexp.MustCompile(`^\s*\d+\s`)
+	first = gutter.ReplaceAllString(first, "")
+	second = gutter.ReplaceAllString(second, "")
+	firstTitleIdx := strings.Index(first, "Fix")
 	if firstTitleIdx < 0 {
 		t.Fatalf("expected first line to contain title start, got %q", first)
 	}
@@ -494,6 +497,7 @@ func TestWrapNotificationsDoesNotCollapseContinuationIndentWhenNarrow(t *testing
 	foundWrapped := false
 	for _, line := range lines {
 		plain := ansi.ReplaceAllString(strings.TrimRight(line, " "), "")
+		plain = regexp.MustCompile(`^\s*\d+\s`).ReplaceAllString(plain, "")
 		if strings.Contains(plain, "via") {
 			foundWrapped = true
 			leading := len(plain) - len(strings.TrimLeft(plain, " "))
@@ -535,6 +539,27 @@ func TestNotificationTabsLineDoesNotOverflowPaneWidth(t *testing.T) {
 	}
 	if !strings.Contains(plain, "godotengine") {
 		t.Fatalf("expected active tab to remain visible, got %q", plain)
+	}
+}
+
+func TestNotificationTabBarHasNoRelativeNumber(t *testing.T) {
+	m := newModel(context.Background(), nil, nil)
+	m.state.Width = 52
+	m.state.Height = 10
+	m.state.Focus = focusNotifications
+	m.state.Notifications = []notifRow{{id: "n1", repo: "owner/repo", ref: "owner/repo#1", title: "t"}}
+	m.state.rebuildNotifIndex()
+	m.state.SelectedNotif = "n1"
+	m.state.NotifSelected = 0
+	m.state.NotifLoading = false
+
+	mode := m.state.currentPaneMode()
+	leftW, _, _ := paneWidths(panesTotalWidth(m.state.Width, m.state.Focus, mode), m.state.Focus, mode)
+	out := m.renderNotifications(leftW, paneInnerHeight(m.state))
+	first := strings.Split(out, "\n")[0]
+	plain := regexp.MustCompile(`\x1b\[[0-9;]*m`).ReplaceAllString(first, "")
+	if regexp.MustCompile(`^\s*\d+\s`).MatchString(plain) {
+		t.Fatalf("expected tab bar without relative number prefix, got %q", plain)
 	}
 }
 
@@ -619,7 +644,7 @@ func TestSelectedUnreadTimelineRowKeepsSelectionBackgroundOnMarker(t *testing.T)
 	ts.selectedIndex = 0
 
 	out := m.View()
-	selectedMarker := m.styles.unreadSelected.Render("● ")
+	selectedMarker := m.styles.unreadSelected.Render(" ●  ")
 	if !strings.Contains(out, selectedMarker) {
 		t.Fatalf("expected selected unread marker style in output, got %q", out)
 	}
@@ -627,10 +652,10 @@ func TestSelectedUnreadTimelineRowKeepsSelectionBackgroundOnMarker(t *testing.T)
 
 func TestSelectedUnreadNotificationRowKeepsMarkerAndSelectedTimestampStyling(t *testing.T) {
 	m := newModel(context.Background(), nil, nil)
-	line := "● 1h owner/repo  Add support for marker styling"
+	line := " ●  1h owner/repo  Add support for marker styling"
 	out := m.renderNotificationStyledLine(line, 70, 8, true)
 
-	if !strings.Contains(out, m.styles.unreadSelected.Render("● ")) {
+	if !strings.Contains(out, m.styles.unreadSelected.Render(" ●  ")) {
 		t.Fatalf("expected selected unread marker style, got %q", out)
 	}
 	if !strings.Contains(out, "1h") {
@@ -648,10 +673,10 @@ func TestSelectedUnreadNotificationRowKeepsMarkerAndSelectedTimestampStyling(t *
 
 func TestSelectedPartialNotificationRowKeepsMarkerStyling(t *testing.T) {
 	m := newModel(context.Background(), nil, nil)
-	line := "◐ 1h owner/repo  Partial read state"
+	line := " ◐  1h owner/repo  Partial read state"
 	out := m.renderNotificationStyledLine(line, 70, 8, true)
 
-	if !strings.Contains(out, m.styles.unreadSelected.Render("◐ ")) {
+	if !strings.Contains(out, m.styles.unreadSelected.Render(" ◐  ")) {
 		t.Fatalf("expected selected partial marker style, got %q", out)
 	}
 }
@@ -679,7 +704,7 @@ func TestThreadHeaderUsesPartialMarkerWhenMixedReadState(t *testing.T) {
 		t.Fatalf("expected one thread header row, got %d", len(rows))
 	}
 	marker, _, _ := timelineRowPrefixAndContent(rows[0], ts, 12, 10)
-	if marker != "◐ " {
+	if marker != " ◐  " {
 		t.Fatalf("expected partial marker, got %q", marker)
 	}
 }

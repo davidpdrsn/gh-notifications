@@ -126,6 +126,7 @@ type AppState struct {
 	DetailScroll     int
 	NextReadOpID     int64
 	PendingRead      map[int64]pendingReadOp
+	MotionCount      string
 	notifMarkerByRef map[string]string
 }
 
@@ -595,7 +596,7 @@ func (ts *timelineState) hasPendingReadState(rows []displayTimelineRow) bool {
 func (ts *timelineState) rowUnreadMarker(row displayTimelineRow) string {
 	ids := ts.rowLeafEventIDs(row)
 	if len(ids) == 0 {
-		return "  "
+		return "    "
 	}
 
 	unread := 0
@@ -605,12 +606,12 @@ func (ts *timelineState) rowUnreadMarker(row displayTimelineRow) string {
 		}
 	}
 	if unread == 0 {
-		return "  "
+		return "    "
 	}
 	if unread == len(ids) {
-		return "● "
+		return " ●  "
 	}
-	return "◐ "
+	return " ◐  "
 }
 
 func (ts *timelineState) allEventIDs() []string {
@@ -665,23 +666,23 @@ func (s *AppState) notificationUnreadMarker(n notifRow) string {
 		if cached, ok := s.notifMarkerByRef[n.ref]; ok {
 			return cached
 		}
-		return "● "
+		return " ●  "
 	}
 	known, read := s.notificationReadState(n)
 	if !known {
 		if cached, ok := s.notifMarkerByRef[n.ref]; ok {
 			return cached
 		}
-		return "● "
+		return " ●  "
 	}
 	if read {
-		s.notifMarkerByRef[n.ref] = "  "
-		return "  "
+		s.notifMarkerByRef[n.ref] = "    "
+		return "    "
 	}
 	ids := ts.allEventIDs()
 	if len(ids) == 0 {
-		s.notifMarkerByRef[n.ref] = "  "
-		return "  "
+		s.notifMarkerByRef[n.ref] = "    "
+		return "    "
 	}
 
 	unread := 0
@@ -691,15 +692,15 @@ func (s *AppState) notificationUnreadMarker(n notifRow) string {
 		}
 	}
 	if unread == 0 {
-		s.notifMarkerByRef[n.ref] = "  "
-		return "  "
+		s.notifMarkerByRef[n.ref] = "    "
+		return "    "
 	}
 	if unread == len(ids) {
-		s.notifMarkerByRef[n.ref] = "● "
-		return "● "
+		s.notifMarkerByRef[n.ref] = " ●  "
+		return " ●  "
 	}
-	s.notifMarkerByRef[n.ref] = "◐ "
-	return "◐ "
+	s.notifMarkerByRef[n.ref] = " ◐  "
+	return " ◐  "
 }
 
 func compactThreadChildSummary(ev ghpr.TimelineEvent) string {

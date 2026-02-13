@@ -1567,18 +1567,50 @@ func TestNotificationUnreadMarkerUsesCacheWhileReadStateUnknown(t *testing.T) {
 	body := "b"
 	ts.insertTimelineEvent(ghpr.TimelineEvent{ID: "e1", Type: "github.timeline.commented", OccurredAt: time.Now().UTC(), Comment: &ghpr.CommentContext{Body: &body}})
 
-	if got := state.notificationUnreadMarker(n); got != "● " {
+	if got := state.notificationUnreadMarker(n); got != " ●  " {
 		t.Fatalf("expected unread marker while unknown, got %q", got)
 	}
 
 	ts.readKnownByEventID["e1"] = true
 	ts.readByEventID["e1"] = false
-	if got := state.notificationUnreadMarker(n); got != "● " {
+	if got := state.notificationUnreadMarker(n); got != " ●  " {
 		t.Fatalf("expected unread marker once known, got %q", got)
 	}
 
 	ts.readKnownByEventID["e1"] = false
-	if got := state.notificationUnreadMarker(n); got != "● " {
+	if got := state.notificationUnreadMarker(n); got != " ●  " {
 		t.Fatalf("expected cached unread marker while unknown again, got %q", got)
+	}
+}
+
+func TestMotionCountPrefixMovesMultipleRows(t *testing.T) {
+	state := NewState()
+	state.Focus = focusNotifications
+	state.Notifications = make([]notifRow, 0, 30)
+	for i := 0; i < 30; i++ {
+		id := fmt.Sprintf("n%d", i)
+		state.Notifications = append(state.Notifications, notifRow{id: id, repo: "o/r", ref: fmt.Sprintf("o/r#%d", i), updatedAt: time.Now().UTC().Add(-time.Duration(i) * time.Minute)})
+	}
+	state.rebuildNotifIndex()
+	state.SelectedNotif = state.Notifications[0].id
+	state.NotifSelected = 0
+
+	state, _ = Reduce(state, KeyEvent{Key: "1"})
+	state, _ = Reduce(state, KeyEvent{Key: "0"})
+	state, _ = Reduce(state, KeyEvent{Key: "j"})
+
+	visible := state.visibleNotifications()
+	idx := indexOfNotificationByID(visible, state.SelectedNotif)
+	if idx != 10 {
+		t.Fatalf("expected selection to move down 10 rows, got %d", idx)
+	}
+
+	state, _ = Reduce(state, KeyEvent{Key: "1"})
+	state, _ = Reduce(state, KeyEvent{Key: "5"})
+	state, _ = Reduce(state, KeyEvent{Key: "k"})
+	visible = state.visibleNotifications()
+	idx = indexOfNotificationByID(visible, state.SelectedNotif)
+	if idx != 0 {
+		t.Fatalf("expected selection to clamp at top, got %d", idx)
 	}
 }

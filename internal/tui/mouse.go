@@ -145,11 +145,11 @@ func threadRowAtY(state AppState, y, width int) int {
 	if ts == nil || ts.activeThreadID == "" {
 		return -1
 	}
-	rows := ts.threadRows(ts.activeThreadID, state.HideRead)
+	rows := ts.rowsReadyForDisplay(ts.threadRows(ts.activeThreadID, state.HideRead))
 	if len(rows) == 0 || width <= 0 || y < 0 {
 		return -1
 	}
-	avail := contentWidth(width)
+	avail := paneContentWidthWithRelativeNumbers(width, paneInnerHeight(state))
 	if avail < 1 {
 		avail = 1
 	}
@@ -211,7 +211,7 @@ func notificationRowAtY(state AppState, y, width int) int {
 		return -1
 	}
 
-	avail := contentWidth(width)
+	avail := paneContentWidthWithRelativeNumbers(width, paneInnerHeight(state))
 	if avail < 1 {
 		avail = 1
 	}
@@ -221,7 +221,7 @@ func notificationRowAtY(state AppState, y, width int) int {
 
 	for i := state.NotifScroll; i < len(visible); i++ {
 		n := visible[i]
-		prefix := padToDisplayWidth(timeAgo(n.updatedAt), timeColWidth) + " "
+		prefix := state.notificationUnreadMarker(n) + padToDisplayWidth(timeAgo(n.updatedAt), timeColWidth) + " "
 		repo := padToDisplayWidth(clampDisplayWidth(oneLine(n.repo), repoColWidth), repoColWidth)
 		label := prefix + repo + "  " + oneLine(n.title)
 		titleIndent := strings.Repeat(" ", lipgloss.Width(prefix)+repoColWidth+2)
@@ -244,7 +244,7 @@ func timelineRowAtY(state AppState, y, width int) int {
 	if ts == nil {
 		return -1
 	}
-	rows := ts.displayRows(state.HideRead)
+	rows := ts.rowsReadyForDisplay(ts.displayRows(state.HideRead))
 	if len(rows) == 0 || width <= 0 {
 		return -1
 	}
@@ -252,7 +252,7 @@ func timelineRowAtY(state AppState, y, width int) int {
 		return -1
 	}
 
-	avail := contentWidth(width)
+	avail := paneContentWidthWithRelativeNumbers(width, paneInnerHeight(state))
 	if avail < 1 {
 		avail = 1
 	}
