@@ -10,7 +10,7 @@ import (
 )
 
 func TestUpdateKeyMsgDoesNotSpawnAsyncWaiter(t *testing.T) {
-	m := newModel(context.Background(), ghpr.NewClient(""))
+	m := newModel(context.Background(), ghpr.NewClient(""), nil)
 
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
 	if cmd != nil {
@@ -19,7 +19,7 @@ func TestUpdateKeyMsgDoesNotSpawnAsyncWaiter(t *testing.T) {
 }
 
 func TestUpdateAsyncMsgRearmsAsyncWaiter(t *testing.T) {
-	m := newModel(context.Background(), ghpr.NewClient(""))
+	m := newModel(context.Background(), ghpr.NewClient(""), nil)
 
 	_, cmd := m.Update(notifDoneMsg{gen: m.state.NotifGen})
 	if cmd == nil {

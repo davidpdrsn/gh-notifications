@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"gh-pr/ghpr"
+	"gh-pr/internal/readstate"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -12,6 +13,7 @@ import (
 type model struct {
 	ctx    context.Context
 	client *ghpr.Client
+	store  *readstate.Store
 
 	state AppState
 
@@ -29,6 +31,8 @@ type styles struct {
 	selected       lipgloss.Style
 	selectedMuted  lipgloss.Style
 	muted          lipgloss.Style
+	unreadMarker   lipgloss.Style
+	unreadSelected lipgloss.Style
 	error          lipgloss.Style
 	status         lipgloss.Style
 	tab            lipgloss.Style
@@ -45,12 +49,13 @@ type styles struct {
 	diffDel        lipgloss.Style
 }
 
-func newModel(ctx context.Context, client *ghpr.Client) *model {
+func newModel(ctx context.Context, client *ghpr.Client, store *readstate.Store) *model {
 	t := catppuccinMocha
 
 	return &model{
 		ctx:    ctx,
 		client: client,
+		store:  store,
 		state:  NewState(),
 		msgCh:  make(chan tea.Msg, 512),
 		styles: styles{
@@ -61,8 +66,10 @@ func newModel(ctx context.Context, client *ghpr.Client) *model {
 			selectedMuted: lipgloss.NewStyle().
 				Background(t.selectedBg).
 				Foreground(t.textMuted),
-			muted: lipgloss.NewStyle().Foreground(t.textMuted),
-			error: lipgloss.NewStyle().Foreground(t.danger),
+			muted:          lipgloss.NewStyle().Foreground(t.textMuted),
+			unreadMarker:   lipgloss.NewStyle().Foreground(t.warning),
+			unreadSelected: lipgloss.NewStyle().Foreground(t.warning).Background(t.selectedBg),
+			error:          lipgloss.NewStyle().Foreground(t.danger),
 			status: lipgloss.NewStyle().
 				Foreground(t.statusFg).
 				Background(t.statusBg),
@@ -96,6 +103,6 @@ func waitForAsyncMsg(ch <-chan tea.Msg) tea.Cmd {
 }
 
 func (m *model) debugStatus() string {
-	parts := []string{"q", "tab", "h/l", "j/k", "^p/^n", "^u/^d", "C"}
+	parts := []string{"q", "tab", "h/l", "j/k", "r", "H", "^p/^n", "^u/^d", "C"}
 	return stringsJoin(parts, "   ")
 }

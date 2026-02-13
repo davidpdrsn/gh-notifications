@@ -58,6 +58,9 @@ type timelineState struct {
 	rowIndexByID        map[string]int
 	threadByID          map[string]*threadGroup
 	expandedThreads     map[string]bool
+	readByEventID       map[string]bool
+	readKnownByEventID  map[string]bool
+	readLoadInFlight    map[string]bool
 	commitDiffByID      map[string]commitDiffState
 	forcePushByID       map[string]forcePushDiffState
 	selectedID          string
@@ -115,21 +118,35 @@ type AppState struct {
 	TimelineGen   int
 	CurrentRef    string
 	TimelineByRef map[string]*timelineState
+	HideRead      bool
 
 	Status string
 	Quit   bool
 
-	DetailScroll int
+	DetailScroll     int
+	NextReadOpID     int64
+	PendingRead      map[int64]pendingReadOp
+	notifMarkerByRef map[string]string
+}
+
+type pendingReadOp struct {
+	ref       string
+	eventIDs  []string
+	read      bool
+	prevRead  map[string]bool
+	prevKnown map[string]bool
 }
 
 func NewState() AppState {
 	return AppState{
-		Focus:          focusNotifications,
-		NotifGen:       1,
-		NotifIndexByID: make(map[string]int),
-		NotifLoading:   true,
-		NotifTab:       allNotificationsTab,
-		TimelineByRef:  make(map[string]*timelineState),
+		Focus:            focusNotifications,
+		NotifGen:         1,
+		NotifIndexByID:   make(map[string]int),
+		NotifLoading:     true,
+		NotifTab:         allNotificationsTab,
+		TimelineByRef:    make(map[string]*timelineState),
+		PendingRead:      make(map[int64]pendingReadOp),
+		notifMarkerByRef: make(map[string]string),
 	}
 }
 
@@ -142,12 +159,15 @@ func (s *AppState) currentTimeline() *timelineState {
 	ts, ok := s.TimelineByRef[s.CurrentRef]
 	if !ok {
 		ts = &timelineState{
-			ref:             s.CurrentRef,
-			rowIndexByID:    make(map[string]int),
-			threadByID:      make(map[string]*threadGroup),
-			expandedThreads: make(map[string]bool),
-			commitDiffByID:  make(map[string]commitDiffState),
-			forcePushByID:   make(map[string]forcePushDiffState),
+			ref:                s.CurrentRef,
+			rowIndexByID:       make(map[string]int),
+			threadByID:         make(map[string]*threadGroup),
+			expandedThreads:    make(map[string]bool),
+			readByEventID:      make(map[string]bool),
+			readKnownByEventID: make(map[string]bool),
+			readLoadInFlight:   make(map[string]bool),
+			commitDiffByID:     make(map[string]commitDiffState),
+			forcePushByID:      make(map[string]forcePushDiffState),
 		}
 		s.TimelineByRef[s.CurrentRef] = ts
 	}
@@ -241,7 +261,7 @@ func (s *AppState) selectedTimelineEvent() *ghpr.TimelineEvent {
 	if ts == nil {
 		return nil
 	}
-	rows := ts.displayRows()
+	rows := ts.displayRows(s.HideRead)
 	if len(rows) == 0 {
 		return nil
 	}
@@ -261,7 +281,7 @@ func (s *AppState) selectedThreadEvent() *ghpr.TimelineEvent {
 	if ts == nil || ts.activeThreadID == "" {
 		return nil
 	}
-	rows := ts.threadRows(ts.activeThreadID)
+	rows := ts.threadRows(ts.activeThreadID, s.HideRead)
 	if len(rows) == 0 {
 		return nil
 	}
@@ -373,14 +393,14 @@ func (ts *timelineState) insertTimelineEvent(ev ghpr.TimelineEvent) {
 	}
 
 	if selected == "" {
-		display := ts.displayRows()
+		display := ts.displayRows(false)
 		if len(display) > 0 {
 			ts.selectedID = display[0].id
 			ts.selectedIndex = 0
 		}
 	} else {
 		ts.selectedID = selected
-		display := ts.displayRows()
+		display := ts.displayRows(false)
 		ts.selectedIndex = indexOfTimelineSelection(display, ts.selectedID)
 	}
 }
@@ -442,7 +462,7 @@ func (ts *timelineState) insertBaseRow(row timelineRow) {
 	ts.rebuildRowIndex()
 }
 
-func (ts *timelineState) displayRows() []displayTimelineRow {
+func (ts *timelineState) displayRows(hideRead bool) []displayTimelineRow {
 	rows := make([]displayTimelineRow, 0, len(ts.rows))
 	for _, base := range ts.rows {
 		if base.thread != nil {
@@ -457,22 +477,29 @@ func (ts *timelineState) displayRows() []displayTimelineRow {
 				event:          root,
 				label:          compactEventSummary(*root),
 			}
+			if hideRead && ts.rowRead(head) {
+				continue
+			}
 			rows = append(rows, head)
 			continue
 		}
 		if base.event != nil {
 			ev := *base.event
-			rows = append(rows, displayTimelineRow{
+			row := displayTimelineRow{
 				id:    eventRowID(ev.ID),
 				event: &ev,
 				label: compactEventSummary(ev),
-			})
+			}
+			if hideRead && ts.rowRead(row) {
+				continue
+			}
+			rows = append(rows, row)
 		}
 	}
 	return rows
 }
 
-func (ts *timelineState) threadRows(threadID string) []displayTimelineRow {
+func (ts *timelineState) threadRows(threadID string, hideRead bool) []displayTimelineRow {
 	group := ts.threadByID[threadID]
 	if group == nil || len(group.items) == 0 {
 		return nil
@@ -480,15 +507,199 @@ func (ts *timelineState) threadRows(threadID string) []displayTimelineRow {
 	rows := make([]displayTimelineRow, 0, len(group.items))
 	for i := 0; i < len(group.items); i++ {
 		ev := group.items[i]
-		rows = append(rows, displayTimelineRow{
+		row := displayTimelineRow{
 			id:           threadChildID(threadID, ev.ID),
 			threadID:     threadID,
 			isThreadRoot: i == 0,
 			event:        &ev,
 			label:        compactThreadChildSummary(ev),
-		})
+		}
+		if hideRead && ts.rowRead(row) {
+			continue
+		}
+		rows = append(rows, row)
 	}
 	return rows
+}
+
+func (ts *timelineState) rowLeafEventIDs(row displayTimelineRow) []string {
+	if row.isThreadHeader {
+		group := ts.threadByID[row.threadID]
+		if group == nil {
+			return nil
+		}
+		ids := make([]string, 0, len(group.items))
+		for _, ev := range group.items {
+			if ev.ID == "" {
+				continue
+			}
+			ids = append(ids, ev.ID)
+		}
+		return ids
+	}
+	if row.event == nil || row.event.ID == "" {
+		return nil
+	}
+	return []string{row.event.ID}
+}
+
+func (ts *timelineState) rowRead(row displayTimelineRow) bool {
+	ids := ts.rowLeafEventIDs(row)
+	if len(ids) == 0 {
+		return false
+	}
+	for _, id := range ids {
+		if !ts.readByEventID[id] {
+			return false
+		}
+	}
+	return true
+}
+
+func (ts *timelineState) rowReadKnown(row displayTimelineRow) bool {
+	ids := ts.rowLeafEventIDs(row)
+	if len(ids) == 0 {
+		return true
+	}
+	for _, id := range ids {
+		if ts.readKnownByEventID[id] {
+			continue
+		}
+		if ts.readLoadInFlight[id] {
+			return false
+		}
+	}
+	return true
+}
+
+func (ts *timelineState) rowsReadyForDisplay(rows []displayTimelineRow) []displayTimelineRow {
+	filtered := make([]displayTimelineRow, 0, len(rows))
+	for _, row := range rows {
+		if !ts.rowReadKnown(row) {
+			continue
+		}
+		filtered = append(filtered, row)
+	}
+	return filtered
+}
+
+func (ts *timelineState) hasPendingReadState(rows []displayTimelineRow) bool {
+	for _, row := range rows {
+		if !ts.rowReadKnown(row) {
+			return true
+		}
+	}
+	return false
+}
+
+func (ts *timelineState) rowUnreadMarker(row displayTimelineRow) string {
+	ids := ts.rowLeafEventIDs(row)
+	if len(ids) == 0 {
+		return "  "
+	}
+
+	unread := 0
+	for _, id := range ids {
+		if !ts.readByEventID[id] {
+			unread++
+		}
+	}
+	if unread == 0 {
+		return "  "
+	}
+	if unread == len(ids) {
+		return "● "
+	}
+	return "◐ "
+}
+
+func (ts *timelineState) allEventIDs() []string {
+	ids := make([]string, 0, len(ts.rows))
+	for _, base := range ts.rows {
+		if base.event != nil && base.event.ID != "" {
+			ids = append(ids, base.event.ID)
+			continue
+		}
+		if base.thread == nil {
+			continue
+		}
+		for _, ev := range base.thread.items {
+			if ev.ID == "" {
+				continue
+			}
+			ids = append(ids, ev.ID)
+		}
+	}
+	return ids
+}
+
+func (s *AppState) notificationReadState(n notifRow) (known bool, read bool) {
+	ts := s.TimelineByRef[n.ref]
+	if ts == nil {
+		return false, false
+	}
+	ids := ts.allEventIDs()
+	if len(ids) == 0 {
+		return ts.done, ts.done
+	}
+	for _, id := range ids {
+		if id == "" {
+			continue
+		}
+		if !ts.readKnownByEventID[id] {
+			return false, false
+		}
+		if !ts.readByEventID[id] {
+			return true, false
+		}
+	}
+	return true, true
+}
+
+func (s *AppState) notificationUnreadMarker(n notifRow) string {
+	ts := s.TimelineByRef[n.ref]
+	if s.notifMarkerByRef == nil {
+		s.notifMarkerByRef = make(map[string]string)
+	}
+	if ts == nil {
+		if cached, ok := s.notifMarkerByRef[n.ref]; ok {
+			return cached
+		}
+		return "● "
+	}
+	known, read := s.notificationReadState(n)
+	if !known {
+		if cached, ok := s.notifMarkerByRef[n.ref]; ok {
+			return cached
+		}
+		return "● "
+	}
+	if read {
+		s.notifMarkerByRef[n.ref] = "  "
+		return "  "
+	}
+	ids := ts.allEventIDs()
+	if len(ids) == 0 {
+		s.notifMarkerByRef[n.ref] = "  "
+		return "  "
+	}
+
+	unread := 0
+	for _, id := range ids {
+		if !ts.readByEventID[id] {
+			unread++
+		}
+	}
+	if unread == 0 {
+		s.notifMarkerByRef[n.ref] = "  "
+		return "  "
+	}
+	if unread == len(ids) {
+		s.notifMarkerByRef[n.ref] = "● "
+		return "● "
+	}
+	s.notifMarkerByRef[n.ref] = "◐ "
+	return "◐ "
 }
 
 func compactThreadChildSummary(ev ghpr.TimelineEvent) string {
@@ -574,32 +785,8 @@ func compactEventSummary(ev ghpr.TimelineEvent) string {
 func eventKindLabel(ev ghpr.TimelineEvent) string {
 	if ev.Event != nil {
 		if e := oneLine(*ev.Event); e != "" {
-			switch e {
-			case "review_requested":
-				return "requested"
-			case "review_request_removed":
-				return "unrequested"
-			case "line-commented":
-				return "commented"
-			case "head_ref_force_pushed":
-				return "force_push"
-			}
 			return e
 		}
-	}
-	switch ev.Type {
-	case "pr.opened", "issue.opened":
-		return "opened"
-	case "github.review_comment":
-		return "review-comment"
-	case "github.timeline.commented":
-		return "commented"
-	case "github.timeline.committed":
-		return "committed"
-	case "github.timeline.reviewed":
-		return "reviewed"
-	case "github.timeline.head_ref_force_pushed":
-		return "force_push"
 	}
 	if idx := strings.LastIndex(ev.Type, "."); idx >= 0 && idx < len(ev.Type)-1 {
 		return ev.Type[idx+1:]

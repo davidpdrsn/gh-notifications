@@ -27,7 +27,7 @@ func threadColumnText(state AppState) string {
 	if ts == nil || ts.activeThreadID == "" {
 		return ""
 	}
-	rows := ts.threadRows(ts.activeThreadID)
+	rows := ts.threadRows(ts.activeThreadID, state.HideRead)
 	if len(rows) == 0 {
 		return ""
 	}
@@ -66,7 +66,7 @@ func timelineColumnText(state AppState) string {
 	if ts == nil {
 		return ""
 	}
-	rows := ts.displayRows()
+	rows := ts.displayRows(state.HideRead)
 	if len(rows) == 0 {
 		return ""
 	}
@@ -120,6 +120,13 @@ func detailLines(state AppState) []string {
 		fmt.Sprintf("type: %s", ev.Type),
 		fmt.Sprintf("id: %s", ev.ID),
 		fmt.Sprintf("at: %s", ev.OccurredAt.Format(time.RFC3339)),
+	}
+	if selected, ok := selectedDetailRead(state); ok {
+		if selected {
+			lines = append(lines, "status: read")
+		} else {
+			lines = append(lines, "status: unread")
+		}
 	}
 	if ev.Event != nil && oneLine(*ev.Event) != "" {
 		lines = append(lines, fmt.Sprintf("event: %s", oneLine(*ev.Event)))
@@ -307,12 +314,33 @@ func selectedDetailIsThreadRoot(state AppState) bool {
 	if ts == nil || ts.activeThreadID == "" {
 		return false
 	}
-	rows := ts.threadRows(ts.activeThreadID)
+	rows := ts.threadRows(ts.activeThreadID, state.HideRead)
 	idx := indexOfThreadSelection(rows, ts.threadSelectedID)
 	if idx < 0 || idx >= len(rows) {
 		return false
 	}
 	return rows[idx].isThreadRoot
+}
+
+func selectedDetailRead(state AppState) (bool, bool) {
+	ts := state.currentTimeline()
+	if ts == nil {
+		return false, false
+	}
+	if ts.activeThreadID != "" && (state.Focus == focusThread || state.Focus == focusDetail) {
+		rows := ts.threadRows(ts.activeThreadID, state.HideRead)
+		idx := indexOfThreadSelection(rows, ts.threadSelectedID)
+		if idx < 0 || idx >= len(rows) {
+			return false, false
+		}
+		return ts.rowRead(rows[idx]), true
+	}
+	rows := ts.displayRows(state.HideRead)
+	idx := indexOfTimelineSelection(rows, ts.selectedID)
+	if idx < 0 || idx >= len(rows) {
+		return false, false
+	}
+	return ts.rowRead(rows[idx]), true
 }
 
 func forcePushInterdiffDetailLines(state AppState, eventID string) []string {

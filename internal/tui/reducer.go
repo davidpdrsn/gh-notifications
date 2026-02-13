@@ -42,6 +42,23 @@ type TimelineErrEvent struct {
 	Ref        string
 	Err        string
 }
+type ReadStateLoadedEvent struct {
+	Ref      string
+	EventIDs []string
+	ReadIDs  []string
+}
+type ReadStateLoadFailedEvent struct {
+	Ref      string
+	EventIDs []string
+	Err      string
+}
+type ReadStatePersistedEvent struct {
+	OpID int64
+}
+type ReadStatePersistFailedEvent struct {
+	OpID int64
+	Err  string
+}
 type CommitDiffLoadedEvent struct {
 	Ref     string
 	EventID string
@@ -84,18 +101,22 @@ type MouseWheelEvent struct {
 	Delta int
 }
 
-func (InitEvent) isEvent()                 {}
-func (WindowSizeEvent) isEvent()           {}
-func (KeyEvent) isEvent()                  {}
-func (NotificationsArrivedEvent) isEvent() {}
-func (NotificationsDoneEvent) isEvent()    {}
-func (NotificationsErrEvent) isEvent()     {}
-func (TimelineArrivedEvent) isEvent()      {}
-func (TimelineWarnEvent) isEvent()         {}
-func (TimelineDoneEvent) isEvent()         {}
-func (TimelineErrEvent) isEvent()          {}
-func (CommitDiffLoadedEvent) isEvent()     {}
-func (CommitDiffErrEvent) isEvent()        {}
+func (InitEvent) isEvent()                   {}
+func (WindowSizeEvent) isEvent()             {}
+func (KeyEvent) isEvent()                    {}
+func (NotificationsArrivedEvent) isEvent()   {}
+func (NotificationsDoneEvent) isEvent()      {}
+func (NotificationsErrEvent) isEvent()       {}
+func (TimelineArrivedEvent) isEvent()        {}
+func (TimelineWarnEvent) isEvent()           {}
+func (TimelineDoneEvent) isEvent()           {}
+func (TimelineErrEvent) isEvent()            {}
+func (ReadStateLoadedEvent) isEvent()        {}
+func (ReadStateLoadFailedEvent) isEvent()    {}
+func (ReadStatePersistedEvent) isEvent()     {}
+func (ReadStatePersistFailedEvent) isEvent() {}
+func (CommitDiffLoadedEvent) isEvent()       {}
+func (CommitDiffErrEvent) isEvent()          {}
 func (ForcePushInterdiffLoadedEvent) isEvent() {
 }
 func (ForcePushInterdiffErrEvent) isEvent() {}
@@ -125,6 +146,16 @@ type CopyColumnEffect struct {
 	Column string
 	Text   string
 }
+type LoadReadStateEffect struct {
+	Ref      string
+	EventIDs []string
+}
+type PersistReadStateEffect struct {
+	OpID     int64
+	Ref      string
+	EventIDs []string
+	Read     bool
+}
 
 func (StartNotificationsEffect) isEffect() {}
 func (StartTimelineEffect) isEffect()      {}
@@ -132,7 +163,9 @@ func (CancelTimelineEffect) isEffect()     {}
 func (StartCommitDiffEffect) isEffect()    {}
 func (StartForcePushInterdiffEffect) isEffect() {
 }
-func (CopyColumnEffect) isEffect() {}
+func (CopyColumnEffect) isEffect()       {}
+func (LoadReadStateEffect) isEffect()    {}
+func (PersistReadStateEffect) isEffect() {}
 
 func Reduce(state AppState, ev Event) (AppState, []Effect) {
 	effects := make([]Effect, 0)
@@ -188,6 +221,10 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 			drillIn(&state)
 		case "left", "h", "backspace":
 			backOut(&state)
+		case "H":
+			state.HideRead = !state.HideRead
+		case "r":
+			toggleSelectedRead(&state, &effects)
 		}
 	case NotificationsArrivedEvent:
 		if e.Generation == state.NotifGen {
@@ -219,7 +256,12 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 		if e.Generation == state.TimelineGen && e.Ref == state.CurrentRef {
 			ts := state.TimelineByRef[e.Ref]
 			if ts != nil {
+				ensureReadStateMaps(ts)
 				ts.insertTimelineEvent(e.Event)
+				if e.Event.ID != "" && !ts.readKnownByEventID[e.Event.ID] && !ts.readLoadInFlight[e.Event.ID] {
+					ts.readLoadInFlight[e.Event.ID] = true
+					effects = append(effects, LoadReadStateEffect{Ref: e.Ref, EventIDs: []string{e.Event.ID}})
+				}
 			}
 		}
 	case TimelineWarnEvent:
@@ -241,6 +283,56 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 				ts.loading = false
 				ts.err = e.Err
 			}
+		}
+	case ReadStateLoadedEvent:
+		if ts := state.TimelineByRef[e.Ref]; ts != nil {
+			ensureReadStateMaps(ts)
+			readSet := make(map[string]bool, len(e.ReadIDs))
+			for _, id := range e.ReadIDs {
+				readSet[id] = true
+			}
+			for _, id := range e.EventIDs {
+				if id == "" {
+					continue
+				}
+				delete(ts.readLoadInFlight, id)
+				ts.readKnownByEventID[id] = true
+				ts.readByEventID[id] = readSet[id]
+			}
+		}
+	case ReadStateLoadFailedEvent:
+		if ts := state.TimelineByRef[e.Ref]; ts != nil {
+			ensureReadStateMaps(ts)
+			for _, id := range e.EventIDs {
+				if id == "" {
+					continue
+				}
+				delete(ts.readLoadInFlight, id)
+			}
+		}
+		if e.Ref == state.CurrentRef {
+			state.Status = "failed to load read state: " + e.Err
+		}
+	case ReadStatePersistedEvent:
+		delete(state.PendingRead, e.OpID)
+	case ReadStatePersistFailedEvent:
+		pending, ok := state.PendingRead[e.OpID]
+		if !ok {
+			break
+		}
+		delete(state.PendingRead, e.OpID)
+		if ts := state.TimelineByRef[pending.ref]; ts != nil {
+			ensureReadStateMaps(ts)
+			for _, id := range pending.eventIDs {
+				if id == "" {
+					continue
+				}
+				ts.readByEventID[id] = pending.prevRead[id]
+				ts.readKnownByEventID[id] = pending.prevKnown[id]
+			}
+		}
+		if pending.ref == state.CurrentRef {
+			state.Status = "failed to persist read state: " + e.Err
 		}
 	case CommitDiffLoadedEvent:
 		if ts := state.TimelineByRef[e.Ref]; ts != nil {
@@ -304,13 +396,13 @@ func handleMouseWheel(state *AppState, e MouseWheelEvent) AppState {
 		ts := state.currentTimeline()
 		if ts != nil {
 			ts.scrollOffset += e.Delta
-			clampTimelineScroll(ts)
+			clampTimelineScroll(ts, state.HideRead)
 		}
 	case mousePaneThread:
 		ts := state.currentTimeline()
 		if ts != nil && ts.activeThreadID != "" {
 			ts.threadScrollOffset += e.Delta
-			rows := ts.threadRows(ts.activeThreadID)
+			rows := ts.threadRows(ts.activeThreadID, state.HideRead)
 			maxScroll := len(rows) - 1
 			if maxScroll < 0 {
 				ts.threadScrollOffset = 0
@@ -355,7 +447,7 @@ func handleMouseClick(state *AppState, effects *[]Effect, event MouseClickEvent)
 			state.Focus = focusTimeline
 			ts := state.currentTimeline()
 			if ts != nil {
-				rows := ts.displayRows()
+				rows := ts.displayRows(state.HideRead)
 				if hit.row >= 0 && hit.row < len(rows) {
 					ts.selectedID = rows[hit.row].id
 					ts.selectedIndex = hit.row
@@ -371,7 +463,7 @@ func handleMouseClick(state *AppState, effects *[]Effect, event MouseClickEvent)
 			if ts == nil || ts.activeThreadID == "" {
 				return *state
 			}
-			rows := ts.threadRows(ts.activeThreadID)
+			rows := ts.threadRows(ts.activeThreadID, state.HideRead)
 			if hit.row >= 0 && hit.row < len(rows) {
 				ts.threadSelectedID = rows[hit.row].id
 				ts.threadSelectedIndex = hit.row
@@ -388,12 +480,15 @@ func ensureTimelineState(state *AppState, ref string) {
 		return
 	}
 	state.TimelineByRef[ref] = &timelineState{
-		ref:             ref,
-		rowIndexByID:    make(map[string]int),
-		threadByID:      make(map[string]*threadGroup),
-		expandedThreads: make(map[string]bool),
-		commitDiffByID:  make(map[string]commitDiffState),
-		forcePushByID:   make(map[string]forcePushDiffState),
+		ref:                ref,
+		rowIndexByID:       make(map[string]int),
+		threadByID:         make(map[string]*threadGroup),
+		expandedThreads:    make(map[string]bool),
+		readByEventID:      make(map[string]bool),
+		readKnownByEventID: make(map[string]bool),
+		readLoadInFlight:   make(map[string]bool),
+		commitDiffByID:     make(map[string]commitDiffState),
+		forcePushByID:      make(map[string]forcePushDiffState),
 	}
 }
 
@@ -438,6 +533,169 @@ func queueSelectedDetailDiff(state *AppState, effects *[]Effect) {
 	}
 }
 
+func toggleSelectedRead(state *AppState, effects *[]Effect) {
+	ts := state.currentTimeline()
+	if ts == nil {
+		return
+	}
+
+	targetRef := state.CurrentRef
+	targetTS := ts
+
+	var (
+		eventIDs    []string
+		currentRead bool
+		nextID      string
+		inThread    bool
+	)
+
+	switch state.Focus {
+	case focusNotifications:
+		n := state.selectedNotification()
+		if n == nil {
+			return
+		}
+		targetRef = n.ref
+		targetTS = state.TimelineByRef[targetRef]
+		if targetTS == nil {
+			return
+		}
+		eventIDs = targetTS.allEventIDs()
+		if len(eventIDs) == 0 {
+			return
+		}
+		currentRead = true
+		for _, id := range eventIDs {
+			if id == "" {
+				continue
+			}
+			if !targetTS.readByEventID[id] {
+				currentRead = false
+				break
+			}
+		}
+	case focusTimeline:
+		rows := ts.displayRows(state.HideRead)
+		if len(rows) == 0 {
+			return
+		}
+		idx := indexOfTimelineSelection(rows, ts.selectedID)
+		if idx < 0 || idx >= len(rows) {
+			return
+		}
+		row := rows[idx]
+		eventIDs = ts.rowLeafEventIDs(row)
+		currentRead = ts.rowRead(row)
+		if idx < len(rows)-1 {
+			nextID = rows[idx+1].id
+		}
+	case focusThread:
+		if ts.activeThreadID == "" {
+			return
+		}
+		inThread = true
+		rows := ts.threadRows(ts.activeThreadID, state.HideRead)
+		if len(rows) == 0 {
+			return
+		}
+		idx := indexOfThreadSelection(rows, ts.threadSelectedID)
+		if idx < 0 || idx >= len(rows) {
+			return
+		}
+		row := rows[idx]
+		eventIDs = ts.rowLeafEventIDs(row)
+		currentRead = ts.rowRead(row)
+		if idx < len(rows)-1 {
+			nextID = rows[idx+1].id
+		}
+	case focusDetail:
+		if ts.activeThreadID != "" {
+			inThread = true
+			rows := ts.threadRows(ts.activeThreadID, state.HideRead)
+			if len(rows) == 0 {
+				return
+			}
+			idx := indexOfThreadSelection(rows, ts.threadSelectedID)
+			if idx < 0 || idx >= len(rows) {
+				return
+			}
+			row := rows[idx]
+			eventIDs = ts.rowLeafEventIDs(row)
+			currentRead = ts.rowRead(row)
+			if idx < len(rows)-1 {
+				nextID = rows[idx+1].id
+			}
+			break
+		}
+		rows := ts.displayRows(state.HideRead)
+		if len(rows) == 0 {
+			return
+		}
+		idx := indexOfTimelineSelection(rows, ts.selectedID)
+		if idx < 0 || idx >= len(rows) {
+			return
+		}
+		row := rows[idx]
+		eventIDs = ts.rowLeafEventIDs(row)
+		currentRead = ts.rowRead(row)
+		if idx < len(rows)-1 {
+			nextID = rows[idx+1].id
+		}
+	default:
+		return
+	}
+
+	ensureReadStateMaps(targetTS)
+
+	if len(eventIDs) == 0 {
+		return
+	}
+	desiredRead := !currentRead
+
+	state.NextReadOpID++
+	opID := state.NextReadOpID
+	if state.PendingRead == nil {
+		state.PendingRead = make(map[int64]pendingReadOp)
+	}
+	prevRead := make(map[string]bool, len(eventIDs))
+	prevKnown := make(map[string]bool, len(eventIDs))
+	for _, id := range eventIDs {
+		if id == "" {
+			continue
+		}
+		prevRead[id] = targetTS.readByEventID[id]
+		prevKnown[id] = targetTS.readKnownByEventID[id]
+		targetTS.readByEventID[id] = desiredRead
+		targetTS.readKnownByEventID[id] = true
+	}
+	state.PendingRead[opID] = pendingReadOp{
+		ref:       targetRef,
+		eventIDs:  append([]string(nil), eventIDs...),
+		read:      desiredRead,
+		prevRead:  prevRead,
+		prevKnown: prevKnown,
+	}
+	*effects = append(*effects, PersistReadStateEffect{
+		OpID:     opID,
+		Ref:      targetRef,
+		EventIDs: append([]string(nil), eventIDs...),
+		Read:     desiredRead,
+	})
+
+	if nextID != "" {
+		if inThread {
+			ts.threadSelectedID = nextID
+			ts.threadSelectedIndex = -1
+			ensureThreadSelectionVisible(state, ts)
+		} else {
+			ts.selectedID = nextID
+			ts.selectedIndex = -1
+			ensureTimelineSelectionVisible(state, ts)
+		}
+		state.DetailScroll = 0
+	}
+}
+
 func moveDown(state *AppState, effects *[]Effect) {
 	switch state.Focus {
 	case focusNotifications:
@@ -455,7 +713,7 @@ func moveDown(state *AppState, effects *[]Effect) {
 		if ts == nil {
 			return
 		}
-		rows := ts.displayRows()
+		rows := ts.displayRows(state.HideRead)
 		if len(rows) == 0 {
 			return
 		}
@@ -471,7 +729,7 @@ func moveDown(state *AppState, effects *[]Effect) {
 		if ts == nil || ts.activeThreadID == "" {
 			return
 		}
-		rows := ts.threadRows(ts.activeThreadID)
+		rows := ts.threadRows(ts.activeThreadID, state.HideRead)
 		if len(rows) == 0 {
 			return
 		}
@@ -491,7 +749,7 @@ func moveDown(state *AppState, effects *[]Effect) {
 			return
 		}
 		if ts.activeThreadID != "" {
-			rows := ts.threadRows(ts.activeThreadID)
+			rows := ts.threadRows(ts.activeThreadID, state.HideRead)
 			if len(rows) == 0 {
 				return
 			}
@@ -507,7 +765,7 @@ func moveDown(state *AppState, effects *[]Effect) {
 			}
 			return
 		}
-		rows := ts.displayRows()
+		rows := ts.displayRows(state.HideRead)
 		if len(rows) == 0 {
 			return
 		}
@@ -538,7 +796,7 @@ func moveUp(state *AppState, effects *[]Effect) {
 		if ts == nil {
 			return
 		}
-		rows := ts.displayRows()
+		rows := ts.displayRows(state.HideRead)
 		if len(rows) == 0 {
 			return
 		}
@@ -554,7 +812,7 @@ func moveUp(state *AppState, effects *[]Effect) {
 		if ts == nil || ts.activeThreadID == "" {
 			return
 		}
-		rows := ts.threadRows(ts.activeThreadID)
+		rows := ts.threadRows(ts.activeThreadID, state.HideRead)
 		if len(rows) == 0 {
 			return
 		}
@@ -571,7 +829,7 @@ func moveUp(state *AppState, effects *[]Effect) {
 			return
 		}
 		if ts.activeThreadID != "" {
-			rows := ts.threadRows(ts.activeThreadID)
+			rows := ts.threadRows(ts.activeThreadID, state.HideRead)
 			if len(rows) == 0 {
 				return
 			}
@@ -584,7 +842,7 @@ func moveUp(state *AppState, effects *[]Effect) {
 			}
 			return
 		}
-		rows := ts.displayRows()
+		rows := ts.displayRows(state.HideRead)
 		if len(rows) == 0 {
 			return
 		}
@@ -607,7 +865,7 @@ func drillIn(state *AppState) {
 		if ts == nil {
 			return
 		}
-		rows := ts.displayRows()
+		rows := ts.displayRows(state.HideRead)
 		idx := indexOfTimelineSelection(rows, ts.selectedID)
 		if idx < 0 || idx >= len(rows) {
 			return
@@ -616,7 +874,7 @@ func drillIn(state *AppState) {
 		if row.isThreadHeader {
 			ts.activeThreadID = row.threadID
 			ts.threadScrollOffset = 0
-			threadRows := ts.threadRows(row.threadID)
+			threadRows := ts.threadRows(row.threadID, state.HideRead)
 			if len(threadRows) > 0 {
 				ts.threadSelectedID = threadRows[0].id
 				ts.threadSelectedIndex = 0
@@ -635,7 +893,7 @@ func drillIn(state *AppState) {
 		if ts == nil || ts.activeThreadID == "" {
 			return
 		}
-		if len(ts.threadRows(ts.activeThreadID)) == 0 {
+		if len(ts.threadRows(ts.activeThreadID, state.HideRead)) == 0 {
 			return
 		}
 		state.Focus = focusDetail
@@ -759,7 +1017,7 @@ func clampNotificationScroll(state *AppState) {
 }
 
 func normalizeTimeline(state *AppState, ts *timelineState) {
-	rows := ts.displayRows()
+	rows := ts.displayRows(state.HideRead)
 	if len(rows) == 0 {
 		ts.selectedID = ""
 		ts.selectedIndex = 0
@@ -787,7 +1045,7 @@ func normalizeTimeline(state *AppState, ts *timelineState) {
 }
 
 func ensureTimelineSelectionVisible(state *AppState, ts *timelineState) {
-	rows := ts.displayRows()
+	rows := ts.displayRows(state.HideRead)
 	if len(rows) == 0 {
 		return
 	}
@@ -800,7 +1058,7 @@ func ensureTimelineSelectionVisible(state *AppState, ts *timelineState) {
 	viewport := timelineViewportRows(*state)
 	mode := state.currentPaneMode()
 	_, midW, _ := paneWidths(panesTotalWidth(state.Width, state.Focus, mode), state.Focus, mode)
-	plan := buildTimelineViewportPlan(ts, midW, viewport)
+	plan := buildTimelineViewportPlan(ts, midW, viewport, state.HideRead)
 	ts.scrollOffset = plan.start
 }
 
@@ -811,7 +1069,7 @@ func normalizeThread(state *AppState, ts *timelineState) {
 		}
 		return
 	}
-	rows := ts.threadRows(ts.activeThreadID)
+	rows := ts.threadRows(ts.activeThreadID, state.HideRead)
 	if len(rows) == 0 {
 		ts.threadSelectedID = ""
 		ts.threadSelectedIndex = 0
@@ -846,7 +1104,7 @@ func normalizeThread(state *AppState, ts *timelineState) {
 		return
 	}
 	// If the timeline selection is no longer this active thread root, pop thread drill mode.
-	timelineRows := ts.displayRows()
+	timelineRows := ts.displayRows(state.HideRead)
 	tIdx := indexOfTimelineSelection(timelineRows, ts.selectedID)
 	if tIdx < 0 || tIdx >= len(timelineRows) {
 		ts.activeThreadID = ""
@@ -874,7 +1132,7 @@ func ensureThreadSelectionVisible(state *AppState, ts *timelineState) {
 	if ts == nil || ts.activeThreadID == "" {
 		return
 	}
-	rows := ts.threadRows(ts.activeThreadID)
+	rows := ts.threadRows(ts.activeThreadID, state.HideRead)
 	if len(rows) == 0 {
 		ts.threadScrollOffset = 0
 		return
@@ -901,8 +1159,8 @@ func ensureThreadSelectionVisible(state *AppState, ts *timelineState) {
 	})
 }
 
-func clampTimelineScroll(ts *timelineState) {
-	maxScroll := len(ts.displayRows()) - 1
+func clampTimelineScroll(ts *timelineState, hideRead bool) {
+	maxScroll := len(ts.displayRows(hideRead)) - 1
 	if maxScroll < 0 {
 		ts.scrollOffset = 0
 		return
@@ -1041,6 +1299,7 @@ func selectNotificationByID(state *AppState, effects *[]Effect, id string) {
 	}
 	ensureTimelineState(state, state.CurrentRef)
 	ts := state.TimelineByRef[state.CurrentRef]
+	queueReadStateLoadsForUnknown(ts, state.CurrentRef, effects)
 	if !ts.done {
 		if state.CurrentRef == prevRef {
 			state.TimelineGen++
@@ -1049,6 +1308,41 @@ func selectNotificationByID(state *AppState, effects *[]Effect, id string) {
 		ts.loading = true
 		ts.done = false
 		ts.err = ""
+	}
+}
+
+func queueReadStateLoadsForUnknown(ts *timelineState, ref string, effects *[]Effect) {
+	if ts == nil {
+		return
+	}
+	ensureReadStateMaps(ts)
+	ids := ts.allEventIDs()
+	toLoad := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id == "" {
+			continue
+		}
+		if ts.readKnownByEventID[id] || ts.readLoadInFlight[id] {
+			continue
+		}
+		ts.readLoadInFlight[id] = true
+		toLoad = append(toLoad, id)
+	}
+	if len(toLoad) == 0 {
+		return
+	}
+	*effects = append(*effects, LoadReadStateEffect{Ref: ref, EventIDs: toLoad})
+}
+
+func ensureReadStateMaps(ts *timelineState) {
+	if ts.readByEventID == nil {
+		ts.readByEventID = make(map[string]bool)
+	}
+	if ts.readKnownByEventID == nil {
+		ts.readKnownByEventID = make(map[string]bool)
+	}
+	if ts.readLoadInFlight == nil {
+		ts.readLoadInFlight = make(map[string]bool)
 	}
 }
 

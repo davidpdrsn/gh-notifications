@@ -85,7 +85,7 @@ func (m *model) verticalSeparator(height int) string {
 
 func (m *model) renderNotifications(width, height int) string {
 	lines := make([]string, 0, max(1, height))
-	lines = append(lines, m.renderNotificationTabs())
+	lines = append(lines, m.renderNotificationTabs(contentWidth(width)))
 	if m.state.NotifLoading {
 		lines = append(lines, m.styles.muted.Render("loading..."))
 	}
@@ -107,22 +107,32 @@ func (m *model) renderNotifications(width, height int) string {
 	repoColWidth := notificationRepoColumnWidth(visible)
 	for i := start; i < end; i++ {
 		n := visible[i]
-		prefix := padToDisplayWidth(timeAgo(n.updatedAt), timeColWidth) + " "
+		marker := m.state.notificationUnreadMarker(n)
+		prefix := marker + padToDisplayWidth(timeAgo(n.updatedAt), timeColWidth) + " "
 		repo := padToDisplayWidth(clampDisplayWidth(oneLine(n.repo), repoColWidth), repoColWidth)
 		label := prefix + repo + "  " + oneLine(n.title)
 		avail := contentWidth(width)
 		if avail < 1 {
 			avail = 1
 		}
-		titleIndent := strings.Repeat(" ", lipgloss.Width(prefix)+repoColWidth+2)
+		indentWidth := lipgloss.Width(prefix) + repoColWidth + 2
+		minContinuationWidth := 12
+		maxIndent := avail - minContinuationWidth
+		if maxIndent < 0 {
+			maxIndent = 0
+		}
+		if indentWidth > maxIndent {
+			indentWidth = maxIndent
+		}
+		titleIndent := strings.Repeat(" ", indentWidth)
 		wrapped := wrapDisplayWidth(label, avail, titleIndent)
 		if i == selected {
 			for _, seg := range wrapped {
-				lines = append(lines, renderSelectedNotificationLine(m.styles.selected, m.styles.selectedMuted, seg, avail, timeColWidth+1))
+				lines = append(lines, m.renderNotificationStyledLine(seg, avail, timeColWidth+3, true))
 			}
 		} else {
 			for _, seg := range wrapped {
-				lines = append(lines, renderNotificationTimestamp(seg, timeColWidth+1, m.styles.muted))
+				lines = append(lines, m.renderNotificationStyledLine(seg, avail, timeColWidth+3, false))
 			}
 		}
 	}
@@ -132,16 +142,71 @@ func (m *model) renderNotifications(width, height int) string {
 	return m.styles.text.Render(pane)
 }
 
-func (m *model) renderNotificationTabs() string {
+func (m *model) renderNotificationTabs(width int) string {
+	if width < 1 {
+		width = 1
+	}
 	tabs := m.state.notificationTabs()
 	active := m.state.activeNotificationTab()
-	rendered := make([]string, 0, len(tabs))
+
+	type tabLabel struct {
+		name  string
+		label string
+		width int
+	}
+
+	labels := make([]tabLabel, 0, len(tabs))
 	for _, tab := range tabs {
-		label := " " + tab + " "
-		if tab == active {
-			rendered = append(rendered, m.styles.tabActive.Render(label))
+		name := tab
+		maxNameWidth := width - 2
+		if maxNameWidth < 1 {
+			maxNameWidth = 1
+		}
+		name = clampDisplayWidth(name, maxNameWidth)
+		label := " " + name + " "
+		labels = append(labels, tabLabel{name: tab, label: label, width: lipgloss.Width(label)})
+	}
+
+	activeIdx := 0
+	for i := range labels {
+		if labels[i].name == active {
+			activeIdx = i
+			break
+		}
+	}
+
+	start := activeIdx
+	end := activeIdx + 1
+	used := labels[activeIdx].width
+	for {
+		added := false
+		if start > 0 {
+			w := labels[start-1].width + 1
+			if used+w <= width {
+				start--
+				used += w
+				added = true
+			}
+		}
+		if end < len(labels) {
+			w := labels[end].width + 1
+			if used+w <= width {
+				end++
+				used += w
+				added = true
+			}
+		}
+		if !added {
+			break
+		}
+	}
+
+	rendered := make([]string, 0, end-start)
+	for i := start; i < end; i++ {
+		if labels[i].name == active {
+			rendered = append(rendered, m.styles.tabActive.Render(labels[i].label))
 		} else {
-			rendered = append(rendered, m.styles.tab.Render(label))
+			rendered = append(rendered, m.styles.tab.Render(labels[i].label))
 		}
 	}
 	return stringsJoin(rendered, " ")
@@ -198,6 +263,28 @@ func renderSelectedNotificationLine(selected lipgloss.Style, selectedMuted lipgl
 	return selectedMuted.Render(prefix) + selected.Render(rest)
 }
 
+func (m *model) renderNotificationStyledLine(line string, width int, timeWidth int, selected bool) string {
+	if width < 1 {
+		width = 1
+	}
+	padded := padToDisplayWidth(line, width)
+	prefix, rest := splitAtDisplayWidth(padded, timeWidth)
+
+	if selected {
+		if marker, remainder, ok := splitUnreadMarkerPrefix(prefix); ok {
+			return m.styles.unreadSelected.Render(marker) +
+				m.styles.selectedMuted.Render(remainder) +
+				m.styles.selected.Render(rest)
+		}
+		return m.styles.selectedMuted.Render(prefix) + m.styles.selected.Render(rest)
+	}
+
+	if marker, remainder, ok := splitUnreadMarkerPrefix(prefix); ok {
+		return m.styles.unreadMarker.Render(marker) + m.styles.muted.Render(remainder) + rest
+	}
+	return m.styles.muted.Render(prefix) + rest
+}
+
 func (m *model) renderTimeline(width, height int) string {
 	lines := make([]string, 0, max(1, height))
 	highlightSelection := m.state.Focus == focusTimeline
@@ -211,19 +298,32 @@ func (m *model) renderTimeline(width, height int) string {
 		if ts.err != "" {
 			lines = append(lines, m.styles.error.Render("error: "+ts.err))
 		}
-		rows := ts.displayRows()
-		plan := buildTimelineViewportPlan(ts, width, max(1, height-2))
+		allRows := ts.displayRows(m.state.HideRead)
+		rows := ts.rowsReadyForDisplay(allRows)
+		pendingReadState := ts.hasPendingReadState(allRows)
+		if len(rows) == 0 && !ts.loading && ts.err == "" {
+			if pendingReadState {
+				lines = append(lines, m.styles.muted.Render("loading read state..."))
+			} else if m.state.HideRead {
+				lines = append(lines, m.styles.muted.Render("all events are read"))
+			} else {
+				lines = append(lines, m.styles.muted.Render("no timeline events"))
+			}
+		}
+		plan := buildTimelineViewportPlan(ts, width, max(1, height-2), m.state.HideRead)
+		kindWidth := timelineKindColumnWidth(rows)
 		for _, row := range plan.rows {
+			isRead := ts.rowRead(rows[row.index])
 			if highlightSelection && row.selected {
 				wrapped := row.lines
-				style := m.styleForTimelineRow(rows[row.index])
+				style := m.styleForTimelineRow(ts, rows[row.index])
 				for _, seg := range wrapped {
-					lines = append(lines, renderSelectedLineWithBase(m.styles.selected, style, seg, plan.avail))
+					lines = append(lines, m.renderTimelineStyledLine(style, seg, plan.avail, true, kindWidth, isRead))
 				}
 			} else {
-				style := m.styleForTimelineRow(rows[row.index])
+				style := m.styleForTimelineRow(ts, rows[row.index])
 				for _, seg := range row.lines {
-					lines = append(lines, style.Render(seg))
+					lines = append(lines, m.renderTimelineStyledLine(style, seg, plan.avail, false, kindWidth, isRead))
 				}
 			}
 		}
@@ -241,9 +341,17 @@ func (m *model) renderThread(width, height int) string {
 	if ts == nil || ts.activeThreadID == "" {
 		lines = append(lines, m.styles.muted.Render("no thread selected"))
 	} else {
-		rows := ts.threadRows(ts.activeThreadID)
+		allRows := ts.threadRows(ts.activeThreadID, m.state.HideRead)
+		rows := ts.rowsReadyForDisplay(allRows)
+		pendingReadState := ts.hasPendingReadState(allRows)
 		if len(rows) == 0 {
-			lines = append(lines, m.styles.muted.Render("no replies"))
+			if pendingReadState {
+				lines = append(lines, m.styles.muted.Render("loading read state..."))
+			} else if m.state.HideRead {
+				lines = append(lines, m.styles.muted.Render("all thread events are read"))
+			} else {
+				lines = append(lines, m.styles.muted.Render("no replies"))
+			}
 		} else {
 			avail := contentWidth(width)
 			if avail < 1 {
@@ -259,15 +367,16 @@ func (m *model) renderThread(width, height int) string {
 			}
 			for i := start; i < len(rows); i++ {
 				wrapped := wrapThreadRow(rows[i], ts, avail, actorWidth)
+				isRead := ts.rowRead(rows[i])
 				if highlightSelection && i == ts.threadSelectedIndex {
-					style := m.styleForTimelineRow(rows[i])
+					style := m.styleForTimelineRow(ts, rows[i])
 					for _, seg := range wrapped {
-						lines = append(lines, renderSelectedLineWithBase(m.styles.selected, style, seg, avail))
+						lines = append(lines, m.renderTimelineStyledLine(style, seg, avail, true, 0, isRead))
 					}
 				} else {
-					style := m.styleForTimelineRow(rows[i])
+					style := m.styleForTimelineRow(ts, rows[i])
 					for _, seg := range wrapped {
-						lines = append(lines, style.Render(seg))
+						lines = append(lines, m.renderTimelineStyledLine(style, seg, avail, false, 0, isRead))
 					}
 				}
 			}
@@ -308,7 +417,10 @@ func (m *model) renderDetail(width, height int) string {
 	return m.styles.text.Render(pane)
 }
 
-func (m *model) styleForTimelineRow(row displayTimelineRow) lipgloss.Style {
+func (m *model) styleForTimelineRow(ts *timelineState, row displayTimelineRow) lipgloss.Style {
+	if ts != nil && ts.rowRead(row) {
+		return m.styles.muted
+	}
 	if row.event == nil {
 		return m.styles.secondary
 	}
@@ -316,15 +428,57 @@ func (m *model) styleForTimelineRow(row displayTimelineRow) lipgloss.Style {
 	switch kind {
 	case "opened", "merged", "closed":
 		return m.styles.eventSuccess
-	case "requested", "unrequested", "reviewed":
+	case "review_requested", "review_request_removed", "reviewed":
 		return m.styles.eventWarning
 	case "committed":
 		return m.styles.eventInfo
-	case "force_push":
+	case "head_ref_force_pushed":
 		return m.styles.eventDanger
 	default:
 		return m.styles.text
 	}
+}
+
+func (m *model) renderTimelineStyledLine(base lipgloss.Style, line string, width int, selected bool, kindWidth int, read bool) string {
+	if width < 1 {
+		width = 1
+	}
+	padded := padToDisplayWidth(line, width)
+	renderRest := func(rest string) string {
+		if kindWidth > 0 {
+			kindCol, tail := splitAtExactDisplayWidth(rest, kindWidth)
+			if selected {
+				if read {
+					return m.styles.selected.Render(base.Render(kindCol)) + m.styles.selectedMuted.Render(tail)
+				}
+				return m.styles.selected.Render(base.Render(kindCol)) + m.styles.selected.Render(tail)
+			}
+			if read {
+				return base.Render(kindCol) + m.styles.muted.Render(tail)
+			}
+			return base.Render(kindCol) + tail
+		}
+
+		if selected {
+			if read {
+				return m.styles.selectedMuted.Render(rest)
+			}
+			return m.styles.selected.Render(base.Render(rest))
+		}
+		if read {
+			return m.styles.muted.Render(rest)
+		}
+		return base.Render(rest)
+	}
+
+	if marker, rest, ok := splitUnreadMarkerPrefix(padded); ok {
+		if selected {
+			return m.styles.unreadSelected.Render(marker) + renderRest(rest)
+		}
+		return m.styles.unreadMarker.Render(marker) + renderRest(rest)
+	}
+
+	return renderRest(padded)
 }
 
 func shouldHighlightDetailDiff(state AppState) bool {
@@ -629,6 +783,40 @@ func splitAtDisplayWidth(s string, maxWidth int) (string, string) {
 	return s, ""
 }
 
+func splitAtExactDisplayWidth(s string, maxWidth int) (string, string) {
+	if maxWidth <= 0 || s == "" {
+		return "", s
+	}
+	used := 0
+	lastByte := 0
+	for i, r := range s {
+		rw := runewidth.RuneWidth(r)
+		if rw < 0 {
+			rw = 0
+		}
+		nextByte := i + len(string(r))
+		if used+rw > maxWidth {
+			if lastByte == 0 {
+				_, size := runeAtStart(s)
+				return s[:size], s[size:]
+			}
+			return s[:lastByte], s[lastByte:]
+		}
+		used += rw
+		lastByte = nextByte
+	}
+	return s, ""
+}
+
+func splitUnreadMarkerPrefix(s string) (string, string, bool) {
+	for _, marker := range []string{"● ", "◐ "} {
+		if strings.HasPrefix(s, marker) {
+			return marker, strings.TrimPrefix(s, marker), true
+		}
+	}
+	return "", s, false
+}
+
 func timelineKindColumnWidth(rows []displayTimelineRow) int {
 	width := 9
 	for _, row := range rows {
@@ -639,9 +827,6 @@ func timelineKindColumnWidth(rows []displayTimelineRow) int {
 		if w > width {
 			width = w
 		}
-	}
-	if width > 12 {
-		return 12
 	}
 	return width
 }
@@ -689,6 +874,10 @@ func timelineContinuationIndent(row displayTimelineRow, prefix string, messageOf
 }
 
 func timelineRowPrefixAndContent(row displayTimelineRow, ts *timelineState, kindWidth int, actorWidth int) (string, string, int) {
+	marker := "● "
+	if ts != nil {
+		marker = ts.rowUnreadMarker(row)
+	}
 	if row.event != nil {
 		kind := eventKindLabel(*row.event)
 		actor := eventActorLabel(*row.event)
@@ -704,21 +893,21 @@ func timelineRowPrefixAndContent(row displayTimelineRow, ts *timelineState, kind
 			}
 		}
 		content, messageOffset := formatTimelineColumns(kindWidth, actorWidth, kind, actor, message)
-		return "", content, messageOffset
+		return marker, content, messageOffset
 	}
 
 	label := row.label
 	if row.isThreadHeader {
-		return "", label, 0
+		return marker, label, 0
 	}
-	return "", label, 0
+	return marker, label, 0
 }
 
 func formatTimelineColumns(kindWidth int, actorWidth int, kind, actor, message string) (string, int) {
 	if kindWidth < 1 {
 		kindWidth = 1
 	}
-	kindCol := padToDisplayWidth(clampDisplayWidth(kind, kindWidth), kindWidth)
+	kindCol := padToDisplayWidth(kind, kindWidth)
 	if actorWidth < 0 {
 		actorWidth = 0
 	}
@@ -767,7 +956,10 @@ func wrapThreadRow(row displayTimelineRow, ts *timelineState, maxWidth int, acto
 		message = truncatePreview(eventPreviewText(*row.event), 96)
 	}
 	content, messageOffset := formatThreadChildColumns(actorWidth, actor, message)
-	prefix := ""
+	prefix := "● "
+	if ts != nil {
+		prefix = ts.rowUnreadMarker(row)
+	}
 	indent := ""
 	if messageOffset > 0 {
 		indent += strings.Repeat(" ", messageOffset)

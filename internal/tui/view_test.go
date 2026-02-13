@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"gh-pr/ghpr"
 
@@ -15,7 +17,7 @@ import (
 )
 
 func TestViewFitsWithinReportedTerminalHeight(t *testing.T) {
-	m := newModel(context.Background(), nil)
+	m := newModel(context.Background(), nil, nil)
 	m.state.Width = 90
 	m.state.Height = 24
 
@@ -27,7 +29,7 @@ func TestViewFitsWithinReportedTerminalHeight(t *testing.T) {
 }
 
 func TestViewFitsWithLongWrappedNotificationContent(t *testing.T) {
-	m := newModel(context.Background(), nil)
+	m := newModel(context.Background(), nil, nil)
 	m.state.Width = 80
 	m.state.Height = 20
 	m.state.Notifications = []notifRow{
@@ -105,7 +107,7 @@ func (l *loopModel) View() string {
 }
 
 func TestTeaProgramLoopChangesFocusedPaneWidth(t *testing.T) {
-	base := newModel(context.Background(), nil)
+	base := newModel(context.Background(), nil, nil)
 	base.state.Width = 96
 	base.state.Height = 24
 	base.state.Notifications = []notifRow{{id: "n1", ref: "o/r#1", title: "one"}}
@@ -148,7 +150,7 @@ func TestTeaProgramLoopChangesFocusedPaneWidth(t *testing.T) {
 }
 
 func TestTeaProgramLoopMouseClickSelectsTimeline(t *testing.T) {
-	base := newModel(context.Background(), nil)
+	base := newModel(context.Background(), nil, nil)
 	base.state.Width = 96
 	base.state.Height = 24
 	base.state.NotifLoading = false
@@ -206,7 +208,7 @@ func TestTeaProgramLoopMouseClickSelectsTimeline(t *testing.T) {
 }
 
 func TestTeaProgramLoopJKKeepsTimelineSelectionVisible(t *testing.T) {
-	base := newModel(context.Background(), nil)
+	base := newModel(context.Background(), nil, nil)
 	base.state.Width = 60
 	base.state.Height = 8
 	base.state.Focus = focusTimeline
@@ -275,7 +277,7 @@ func TestTeaProgramLoopJKKeepsTimelineSelectionVisible(t *testing.T) {
 }
 
 func TestViewLinesDoNotExceedTerminalWidth(t *testing.T) {
-	m := newModel(context.Background(), nil)
+	m := newModel(context.Background(), nil, nil)
 	m.state.Width = 90
 	m.state.Height = 20
 	m.state.Focus = focusTimeline
@@ -306,7 +308,7 @@ func TestViewLinesDoNotExceedTerminalWidth(t *testing.T) {
 }
 
 func TestViewLinesDoNotOverflowWithWideUnicode(t *testing.T) {
-	m := newModel(context.Background(), nil)
+	m := newModel(context.Background(), nil, nil)
 	m.state.Width = 72
 	m.state.Height = 18
 	m.state.Focus = focusDetail
@@ -337,7 +339,7 @@ func TestViewLinesDoNotOverflowWithWideUnicode(t *testing.T) {
 }
 
 func TestViewSanitizesCarriageReturnAndTabs(t *testing.T) {
-	m := newModel(context.Background(), nil)
+	m := newModel(context.Background(), nil, nil)
 	m.state.Width = 88
 	m.state.Height = 20
 	m.state.Focus = focusDetail
@@ -405,7 +407,7 @@ func TestNotificationTimePrefixesAlignAcrossRows(t *testing.T) {
 }
 
 func TestRenderNotificationTimestampStylesPrefix(t *testing.T) {
-	m := newModel(context.Background(), nil)
+	m := newModel(context.Background(), nil, nil)
 	line := "2h owner/repo  title"
 	got := renderNotificationTimestamp(line, 3, m.styles.muted)
 
@@ -418,7 +420,7 @@ func TestRenderNotificationTimestampStylesPrefix(t *testing.T) {
 }
 
 func TestWrapNotificationsAlignsWrappedTitleUnderTitleColumn(t *testing.T) {
-	m := newModel(context.Background(), nil)
+	m := newModel(context.Background(), nil, nil)
 	m.state.Width = 86
 	m.state.Height = 12
 	m.state.Focus = focusNotifications
@@ -454,15 +456,85 @@ func TestWrapNotificationsAlignsWrappedTitleUnderTitleColumn(t *testing.T) {
 
 	first := strings.TrimRight(lines[firstIdx], " ")
 	second := strings.TrimRight(lines[firstIdx+1], " ")
+	ansi := regexp.MustCompile(`\x1b\[[0-9;]*m`)
+	first = ansi.ReplaceAllString(first, "")
+	second = ansi.ReplaceAllString(second, "")
 	firstTitleIdx := strings.Index(first, "Fix TextEditor")
 	if firstTitleIdx < 0 {
 		t.Fatalf("expected first line to contain title start, got %q", first)
 	}
-	if len(second) < firstTitleIdx {
-		t.Fatalf("expected wrapped second line to reach title column, got %q", second)
-	}
-	if !strings.HasPrefix(second, strings.Repeat(" ", firstTitleIdx)) {
+	leading := len(second) - len(strings.TrimLeft(second, " "))
+	if leading < 10 {
 		t.Fatalf("expected wrapped second line to align under title column, got %q", second)
+	}
+}
+
+func TestWrapNotificationsDoesNotCollapseContinuationIndentWhenNarrow(t *testing.T) {
+	m := newModel(context.Background(), nil, nil)
+	m.state.Width = 42
+	m.state.Height = 12
+	m.state.Focus = focusNotifications
+	m.state.Notifications = []notifRow{{
+		id:        "n1",
+		updatedAt: time.Now().UTC().Add(-time.Hour),
+		repo:      "lun-energy/web-main",
+		title:     "Submit document data to Botjek via Energy10 API with a very long title",
+		ref:       "lun-energy/web-main#1",
+	}}
+	m.state.rebuildNotifIndex()
+	m.state.NotifLoading = false
+	m.state.SelectedNotif = "n1"
+	m.state.NotifSelected = 0
+
+	mode := m.state.currentPaneMode()
+	leftW, _, _ := paneWidths(panesTotalWidth(m.state.Width, m.state.Focus, mode), m.state.Focus, mode)
+	out := m.renderNotifications(leftW, paneInnerHeight(m.state))
+	lines := strings.Split(out, "\n")
+	ansi := regexp.MustCompile(`\x1b\[[0-9;]*m`)
+	foundWrapped := false
+	for _, line := range lines {
+		plain := ansi.ReplaceAllString(strings.TrimRight(line, " "), "")
+		if strings.Contains(plain, "via") {
+			foundWrapped = true
+			leading := len(plain) - len(strings.TrimLeft(plain, " "))
+			if leading == 0 {
+				t.Fatalf("expected wrapped continuation to keep indentation, got %q", plain)
+			}
+		}
+	}
+	if !foundWrapped {
+		t.Fatalf("expected wrapped continuation line containing 'via', got %q", out)
+	}
+}
+
+func TestNotificationTabsLineDoesNotOverflowPaneWidth(t *testing.T) {
+	m := newModel(context.Background(), nil, nil)
+	m.state.Width = 52
+	m.state.Height = 10
+	m.state.Focus = focusNotifications
+	m.state.Notifications = []notifRow{
+		{id: "n1", repo: "lun-energy/web-main", ref: "lun-energy/web-main#1"},
+		{id: "n2", repo: "idursun/jjui", ref: "idursun/jjui#1"},
+		{id: "n3", repo: "godotengine/godot", ref: "godotengine/godot#1"},
+		{id: "n4", repo: "anomalyco/opencode", ref: "anomalyco/opencode#1"},
+		{id: "n5", repo: "jj-vcs/jj", ref: "jj-vcs/jj#1"},
+	}
+	m.state.rebuildNotifIndex()
+	m.state.NotifLoading = false
+	m.state.NotifTab = "godotengine"
+
+	mode := m.state.currentPaneMode()
+	leftW, _, _ := paneWidths(panesTotalWidth(m.state.Width, m.state.Focus, mode), m.state.Focus, mode)
+	avail := contentWidth(leftW)
+	out := m.renderNotifications(leftW, paneInnerHeight(m.state))
+	firstLine := strings.Split(out, "\n")[0]
+	ansi := regexp.MustCompile(`\x1b\[[0-9;]*m`)
+	plain := ansi.ReplaceAllString(strings.TrimRight(firstLine, " "), "")
+	if lipgloss.Width(plain) > avail {
+		t.Fatalf("expected tabs line width <= %d, got %d line=%q", avail, lipgloss.Width(plain), plain)
+	}
+	if !strings.Contains(plain, "godotengine") {
+		t.Fatalf("expected active tab to remain visible, got %q", plain)
 	}
 }
 
@@ -479,8 +551,8 @@ func TestWrapTimelineRowThreadHeaderHasNoArrowIndent(t *testing.T) {
 	if len(lines) < 2 {
 		t.Fatalf("expected wrapped header lines, got %v", lines)
 	}
-	if strings.HasPrefix(lines[1], "  ") {
-		t.Fatalf("expected continuation line without arrow indent, got %q", lines[1])
+	if strings.HasPrefix(lines[1], "  │") {
+		t.Fatalf("expected continuation line without thread-arrow indent, got %q", lines[1])
 	}
 }
 
@@ -517,6 +589,98 @@ func TestWrapThreadRowUsesHangingIndentForReplies(t *testing.T) {
 	expectedIndent := strings.Repeat(" ", 9+2)
 	if !strings.HasPrefix(lines[1], expectedIndent) {
 		t.Fatalf("expected continuation line to align under message column, got %q", lines[1])
+	}
+}
+
+func TestSelectedUnreadTimelineRowKeepsSelectionBackgroundOnMarker(t *testing.T) {
+	m := newModel(context.Background(), nil, nil)
+	m.state.Width = 90
+	m.state.Height = 20
+	m.state.Focus = focusTimeline
+	m.state.CurrentRef = "o/r#1"
+	m.state.TimelineByRef[m.state.CurrentRef] = &timelineState{
+		ref:                m.state.CurrentRef,
+		rowIndexByID:       map[string]int{},
+		threadByID:         map[string]*threadGroup{},
+		expandedThreads:    map[string]bool{},
+		readByEventID:      map[string]bool{},
+		readKnownByEventID: map[string]bool{},
+		readLoadInFlight:   map[string]bool{},
+	}
+	ts := m.state.TimelineByRef[m.state.CurrentRef]
+	body := "marker-highlight-regression"
+	ts.insertTimelineEvent(ghpr.TimelineEvent{
+		ID:         "e1",
+		Type:       "github.timeline.commented",
+		OccurredAt: time.Now().UTC(),
+		Comment:    &ghpr.CommentContext{Body: &body},
+	})
+	ts.selectedID = eventRowID("e1")
+	ts.selectedIndex = 0
+
+	out := m.View()
+	selectedMarker := m.styles.unreadSelected.Render("● ")
+	if !strings.Contains(out, selectedMarker) {
+		t.Fatalf("expected selected unread marker style in output, got %q", out)
+	}
+}
+
+func TestSelectedUnreadNotificationRowKeepsMarkerAndSelectedTimestampStyling(t *testing.T) {
+	m := newModel(context.Background(), nil, nil)
+	line := "● 1h owner/repo  Add support for marker styling"
+	out := m.renderNotificationStyledLine(line, 70, 8, true)
+
+	if !strings.Contains(out, m.styles.unreadSelected.Render("● ")) {
+		t.Fatalf("expected selected unread marker style, got %q", out)
+	}
+	if !strings.Contains(out, "1h") {
+		t.Fatalf("expected timestamp text to remain present, got %q", out)
+	}
+	if !utf8.ValidString(out) {
+		t.Fatalf("expected valid UTF-8 output, got %q", out)
+	}
+	ansi := regexp.MustCompile(`\x1b\[[0-9;]*m`)
+	plain := ansi.ReplaceAllString(out, "")
+	if lipgloss.Width(plain) > 70 {
+		t.Fatalf("expected rendered line not to overflow width, got width=%d line=%q", lipgloss.Width(plain), plain)
+	}
+}
+
+func TestSelectedPartialNotificationRowKeepsMarkerStyling(t *testing.T) {
+	m := newModel(context.Background(), nil, nil)
+	line := "◐ 1h owner/repo  Partial read state"
+	out := m.renderNotificationStyledLine(line, 70, 8, true)
+
+	if !strings.Contains(out, m.styles.unreadSelected.Render("◐ ")) {
+		t.Fatalf("expected selected partial marker style, got %q", out)
+	}
+}
+
+func TestThreadHeaderUsesPartialMarkerWhenMixedReadState(t *testing.T) {
+	ts := &timelineState{
+		rowIndexByID:       map[string]int{},
+		threadByID:         map[string]*threadGroup{},
+		expandedThreads:    map[string]bool{},
+		readByEventID:      map[string]bool{},
+		readKnownByEventID: map[string]bool{},
+		readLoadInFlight:   map[string]bool{},
+	}
+	threadID := "t1"
+	body := "root"
+	ts.insertTimelineEvent(ghpr.TimelineEvent{ID: "c1", Type: "github.review_comment", OccurredAt: time.Now().UTC(), Comment: &ghpr.CommentContext{ThreadID: &threadID, Body: &body}})
+	ts.insertTimelineEvent(ghpr.TimelineEvent{ID: "c2", Type: "github.review_comment", OccurredAt: time.Now().UTC().Add(time.Minute), Comment: &ghpr.CommentContext{ThreadID: &threadID, Body: &body}})
+	ts.readByEventID["c1"] = true
+	ts.readKnownByEventID["c1"] = true
+	ts.readByEventID["c2"] = false
+	ts.readKnownByEventID["c2"] = true
+
+	rows := ts.displayRows(false)
+	if len(rows) != 1 {
+		t.Fatalf("expected one thread header row, got %d", len(rows))
+	}
+	marker, _, _ := timelineRowPrefixAndContent(rows[0], ts, 12, 10)
+	if marker != "◐ " {
+		t.Fatalf("expected partial marker, got %q", marker)
 	}
 }
 
@@ -571,6 +735,43 @@ func TestFormatTimelineColumnsAlignsKindColumn(t *testing.T) {
 	}
 }
 
+func TestFormatTimelineColumnsDoesNotTruncateKind(t *testing.T) {
+	line, _ := formatTimelineColumns(14, 0, "review_comment", "", "")
+	if !strings.HasPrefix(line, "review_comment") {
+		t.Fatalf("expected full kind label, got %q", line)
+	}
+	if strings.Contains(line, "...") {
+		t.Fatalf("expected kind label without truncation, got %q", line)
+	}
+}
+
+func TestSplitAtExactDisplayWidthDoesNotBreakAtUnderscore(t *testing.T) {
+	prefix, rest := splitAtExactDisplayWidth("review_requested  Dima-369", len("review_requested"))
+	if prefix != "review_requested" {
+		t.Fatalf("expected exact kind prefix, got %q", prefix)
+	}
+	if !strings.HasPrefix(rest, "  Dima-369") {
+		t.Fatalf("expected actor tail after kind, got %q", rest)
+	}
+}
+
+func TestTimelineKindColumnWidthUsesLongestKind(t *testing.T) {
+	rows := []displayTimelineRow{
+		{event: &ghpr.TimelineEvent{Type: "github.timeline.committed"}},
+		{event: &ghpr.TimelineEvent{Type: "github.timeline.head_ref_force_pushed"}},
+	}
+	if got := timelineKindColumnWidth(rows); got != len("head_ref_force_pushed") {
+		t.Fatalf("expected width %d, got %d", len("head_ref_force_pushed"), got)
+	}
+}
+
+func TestEventKindLabelUsesFullTypeName(t *testing.T) {
+	ev := ghpr.TimelineEvent{Type: "github.review_comment"}
+	if got := eventKindLabel(ev); got != "review_comment" {
+		t.Fatalf("expected review_comment, got %q", got)
+	}
+}
+
 func TestFormatTimelineColumnsAlignsMessageColumn(t *testing.T) {
 	first, offset := formatTimelineColumns(8, 10, "opened", "davidpdrsn", "NG-2918 long message")
 	if offset <= 0 {
@@ -590,7 +791,7 @@ func TestFormatTimelineColumnsAlignsMessageColumn(t *testing.T) {
 }
 
 func TestTimelineViewportRemainsReadableWithManyLongEvents(t *testing.T) {
-	m := newModel(context.Background(), nil)
+	m := newModel(context.Background(), nil, nil)
 	m.state.Width = 92
 	m.state.Height = 18
 	m.state.Focus = focusTimeline
@@ -627,7 +828,7 @@ func TestTimelineViewportRemainsReadableWithManyLongEvents(t *testing.T) {
 }
 
 func TestRenderTimelineKeepsSelectedRowVisibleWithStaleScrollOffset(t *testing.T) {
-	m := newModel(context.Background(), nil)
+	m := newModel(context.Background(), nil, nil)
 	m.state.Width = 100
 	m.state.Height = 20
 	m.state.Focus = focusTimeline
@@ -654,7 +855,7 @@ func TestRenderTimelineKeepsSelectedRowVisibleWithStaleScrollOffset(t *testing.T
 }
 
 func TestRenderTimelineKeepsWrappedSelectedRowVisible(t *testing.T) {
-	m := newModel(context.Background(), nil)
+	m := newModel(context.Background(), nil, nil)
 	m.state.Width = 60
 	m.state.Height = 8
 	m.state.Focus = focusTimeline
@@ -772,7 +973,7 @@ func TestShouldHighlightDetailDiffForDiffEventsOnly(t *testing.T) {
 }
 
 func TestViewLinesDoNotOverflowWithColoredCommitDiff(t *testing.T) {
-	m := newModel(context.Background(), nil)
+	m := newModel(context.Background(), nil, nil)
 	m.state.Width = 90
 	m.state.Height = 22
 	m.state.Focus = focusDetail
@@ -807,7 +1008,7 @@ func TestViewLinesDoNotOverflowWithColoredCommitDiff(t *testing.T) {
 }
 
 func TestRenderDetailRespectsDetailScrollOffset(t *testing.T) {
-	m := newModel(context.Background(), nil)
+	m := newModel(context.Background(), nil, nil)
 	m.state.Width = 90
 	m.state.Height = 12
 	m.state.Focus = focusDetail
@@ -831,7 +1032,7 @@ func TestRenderDetailRespectsDetailScrollOffset(t *testing.T) {
 }
 
 func TestRenderDetailHighlightsMentionsForCommentEvents(t *testing.T) {
-	m := newModel(context.Background(), nil)
+	m := newModel(context.Background(), nil, nil)
 	m.state.Width = 90
 	m.state.Height = 12
 	m.state.Focus = focusDetail

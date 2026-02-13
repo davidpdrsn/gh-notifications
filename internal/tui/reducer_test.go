@@ -75,7 +75,7 @@ func TestReduceThreadGrouping(t *testing.T) {
 	if len(ts.rows) != 1 {
 		t.Fatalf("expected 1 base thread row, got %d", len(ts.rows))
 	}
-	display := ts.displayRows()
+	display := ts.displayRows(false)
 	if len(display) != 1 {
 		t.Fatalf("expected only thread root row in timeline, got %d", len(display))
 	}
@@ -432,7 +432,7 @@ func timelineSelectionVisibleWithWrap(state AppState) bool {
 	if ts == nil {
 		return false
 	}
-	rows := ts.displayRows()
+	rows := ts.displayRows(false)
 	if len(rows) == 0 || ts.selectedIndex < 0 || ts.selectedIndex >= len(rows) {
 		return false
 	}
@@ -479,11 +479,11 @@ func TestThreadRowsContainOnlyReplies(t *testing.T) {
 	ts.insertTimelineEvent(t1)
 	ts.insertTimelineEvent(t2)
 
-	display := ts.displayRows()
+	display := ts.displayRows(false)
 	if len(display) != 1 {
 		t.Fatalf("expected only thread root in timeline display, got %d rows", len(display))
 	}
-	replies := ts.threadRows(threadID)
+	replies := ts.threadRows(threadID, false)
 	if len(replies) != 2 {
 		t.Fatalf("expected root + one reply row, got %d", len(replies))
 	}
@@ -524,7 +524,7 @@ func TestThreadHeaderUsesCompactedPath(t *testing.T) {
 	}
 	ts.insertTimelineEvent(ev)
 
-	display := ts.displayRows()
+	display := ts.displayRows(false)
 	if len(display) == 0 {
 		t.Fatal("expected at least one display row")
 	}
@@ -552,7 +552,7 @@ func TestTimelineRowsUseCompactCommentPreview(t *testing.T) {
 	}
 	ts.insertTimelineEvent(ev)
 
-	display := ts.displayRows()
+	display := ts.displayRows(false)
 	if len(display) != 1 {
 		t.Fatalf("expected 1 row, got %d", len(display))
 	}
@@ -1283,5 +1283,302 @@ func TestTabIgnoredOutsideRootView(t *testing.T) {
 	}
 	if len(effects) != 0 {
 		t.Fatalf("expected no effects when tab is ignored, got %d", len(effects))
+	}
+}
+
+func TestToggleReadOnThreadHeaderTogglesAllChildren(t *testing.T) {
+	state := NewState()
+	state.Focus = focusTimeline
+	state.CurrentRef = "o/r#1"
+	state.TimelineByRef[state.CurrentRef] = &timelineState{
+		ref:                state.CurrentRef,
+		rowIndexByID:       map[string]int{},
+		threadByID:         map[string]*threadGroup{},
+		expandedThreads:    map[string]bool{},
+		readByEventID:      map[string]bool{},
+		readKnownByEventID: map[string]bool{},
+		readLoadInFlight:   map[string]bool{},
+	}
+	ts := state.TimelineByRef[state.CurrentRef]
+	threadID := "t1"
+	root := "root"
+	reply := "reply"
+	ts.insertTimelineEvent(ghpr.TimelineEvent{ID: "c1", Type: "github.review_comment", OccurredAt: time.Now().UTC(), Comment: &ghpr.CommentContext{ThreadID: &threadID, Body: &root}})
+	ts.insertTimelineEvent(ghpr.TimelineEvent{ID: "c2", Type: "github.review_comment", OccurredAt: time.Now().UTC().Add(time.Minute), Comment: &ghpr.CommentContext{ThreadID: &threadID, Body: &reply}})
+	ts.selectedID = threadHeaderID(threadID)
+
+	next, effects := Reduce(state, KeyEvent{Key: "r"})
+
+	if !next.TimelineByRef[next.CurrentRef].readByEventID["c1"] || !next.TimelineByRef[next.CurrentRef].readByEventID["c2"] {
+		t.Fatalf("expected thread children to be marked read")
+	}
+	foundPersist := false
+	for _, eff := range effects {
+		p, ok := eff.(PersistReadStateEffect)
+		if !ok {
+			continue
+		}
+		foundPersist = true
+		if !p.Read || len(p.EventIDs) != 2 {
+			t.Fatalf("unexpected persist payload: %+v", p)
+		}
+	}
+	if !foundPersist {
+		t.Fatalf("expected PersistReadStateEffect")
+	}
+}
+
+func TestToggleReadFromNotificationsTogglesAllTimelineChildren(t *testing.T) {
+	tests := []struct {
+		name       string
+		readByID   map[string]bool
+		expectRead bool
+	}{
+		{
+			name:       "all unread become read",
+			readByID:   map[string]bool{"e1": false, "c1": false, "c2": false},
+			expectRead: true,
+		},
+		{
+			name:       "all read become unread",
+			readByID:   map[string]bool{"e1": true, "c1": true, "c2": true},
+			expectRead: false,
+		},
+		{
+			name:       "mixed become read",
+			readByID:   map[string]bool{"e1": true, "c1": false, "c2": true},
+			expectRead: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			state := NewState()
+			state.Focus = focusNotifications
+			state.Notifications = []notifRow{{id: "n1", repo: "o/r", title: "n", ref: "o/r#1"}}
+			state.rebuildNotifIndex()
+			state.SelectedNotif = "n1"
+			state.NotifSelected = 0
+			state.CurrentRef = "o/r#1"
+			state.TimelineByRef[state.CurrentRef] = &timelineState{
+				ref:                state.CurrentRef,
+				rowIndexByID:       map[string]int{},
+				threadByID:         map[string]*threadGroup{},
+				expandedThreads:    map[string]bool{},
+				readByEventID:      map[string]bool{},
+				readKnownByEventID: map[string]bool{},
+				readLoadInFlight:   map[string]bool{},
+			}
+			ts := state.TimelineByRef[state.CurrentRef]
+			threadID := "t1"
+			body := "body"
+			ts.insertTimelineEvent(ghpr.TimelineEvent{ID: "e1", Type: "github.timeline.commented", OccurredAt: time.Now().UTC(), Comment: &ghpr.CommentContext{Body: &body}})
+			ts.insertTimelineEvent(ghpr.TimelineEvent{ID: "c1", Type: "github.review_comment", OccurredAt: time.Now().UTC().Add(time.Minute), Comment: &ghpr.CommentContext{ThreadID: &threadID, Body: &body}})
+			ts.insertTimelineEvent(ghpr.TimelineEvent{ID: "c2", Type: "github.review_comment", OccurredAt: time.Now().UTC().Add(2 * time.Minute), Comment: &ghpr.CommentContext{ThreadID: &threadID, Body: &body}})
+			for id, read := range tc.readByID {
+				ts.readByEventID[id] = read
+				ts.readKnownByEventID[id] = true
+			}
+
+			next, effects := Reduce(state, KeyEvent{Key: "r"})
+
+			nextTS := next.TimelineByRef[next.CurrentRef]
+			for _, id := range []string{"e1", "c1", "c2"} {
+				if nextTS.readByEventID[id] != tc.expectRead {
+					t.Fatalf("expected %s read=%t, got %t", id, tc.expectRead, nextTS.readByEventID[id])
+				}
+			}
+
+			foundPersist := false
+			for _, eff := range effects {
+				p, ok := eff.(PersistReadStateEffect)
+				if !ok {
+					continue
+				}
+				foundPersist = true
+				if p.Read != tc.expectRead {
+					t.Fatalf("expected persist read=%t, got %t", tc.expectRead, p.Read)
+				}
+				if len(p.EventIDs) != 3 {
+					t.Fatalf("expected 3 persisted ids, got %d", len(p.EventIDs))
+				}
+				seen := map[string]bool{}
+				for _, id := range p.EventIDs {
+					seen[id] = true
+				}
+				for _, id := range []string{"e1", "c1", "c2"} {
+					if !seen[id] {
+						t.Fatalf("expected persisted ids to contain %s", id)
+					}
+				}
+			}
+			if !foundPersist {
+				t.Fatalf("expected PersistReadStateEffect")
+			}
+		})
+	}
+}
+
+func TestHideReadFiltersTimelineAndThreadPane(t *testing.T) {
+	state := NewState()
+	state.Focus = focusTimeline
+	state.CurrentRef = "o/r#1"
+	state.TimelineByRef[state.CurrentRef] = &timelineState{
+		ref:                state.CurrentRef,
+		rowIndexByID:       map[string]int{},
+		threadByID:         map[string]*threadGroup{},
+		expandedThreads:    map[string]bool{},
+		readByEventID:      map[string]bool{"e1": true},
+		readKnownByEventID: map[string]bool{"e1": true},
+		readLoadInFlight:   map[string]bool{},
+	}
+	ts := state.TimelineByRef[state.CurrentRef]
+	threadID := "t2"
+	root := "root"
+	reply := "reply"
+	ts.insertTimelineEvent(ghpr.TimelineEvent{ID: "e1", Type: "github.timeline.commented", OccurredAt: time.Now().UTC(), Comment: &ghpr.CommentContext{Body: &root}})
+	ts.insertTimelineEvent(ghpr.TimelineEvent{ID: "c1", Type: "github.review_comment", OccurredAt: time.Now().UTC().Add(time.Minute), Comment: &ghpr.CommentContext{ThreadID: &threadID, Body: &root}})
+	ts.insertTimelineEvent(ghpr.TimelineEvent{ID: "c2", Type: "github.review_comment", OccurredAt: time.Now().UTC().Add(2 * time.Minute), Comment: &ghpr.CommentContext{ThreadID: &threadID, Body: &reply}})
+	ts.readByEventID["c1"] = true
+	ts.readByEventID["c2"] = true
+
+	next, _ := Reduce(state, KeyEvent{Key: "H"})
+	if !next.HideRead {
+		t.Fatalf("expected hide-read enabled")
+	}
+	rows := next.TimelineByRef[next.CurrentRef].displayRows(next.HideRead)
+	if len(rows) != 0 {
+		t.Fatalf("expected all-read timeline rows hidden, got %d", len(rows))
+	}
+
+	next.Focus = focusThread
+	next.TimelineByRef[next.CurrentRef].activeThreadID = threadID
+	threadRows := next.TimelineByRef[next.CurrentRef].threadRows(threadID, next.HideRead)
+	if len(threadRows) != 0 {
+		t.Fatalf("expected all-read thread rows hidden, got %d", len(threadRows))
+	}
+}
+
+func TestTimelineRowsStayHiddenWhileReadStateLoads(t *testing.T) {
+	state := NewState()
+	state.CurrentRef = "o/r#1"
+	state.TimelineGen = 1
+	state.TimelineByRef[state.CurrentRef] = &timelineState{
+		ref:                state.CurrentRef,
+		rowIndexByID:       map[string]int{},
+		threadByID:         map[string]*threadGroup{},
+		expandedThreads:    map[string]bool{},
+		readByEventID:      map[string]bool{},
+		readKnownByEventID: map[string]bool{},
+		readLoadInFlight:   map[string]bool{},
+	}
+
+	body := "hello"
+	next, effects := Reduce(state, TimelineArrivedEvent{
+		Generation: state.TimelineGen,
+		Ref:        state.CurrentRef,
+		Event: ghpr.TimelineEvent{
+			ID:         "e1",
+			Type:       "github.timeline.commented",
+			OccurredAt: time.Now().UTC(),
+			Comment:    &ghpr.CommentContext{Body: &body},
+		},
+	})
+
+	ts := next.TimelineByRef[next.CurrentRef]
+	rows := ts.rowsReadyForDisplay(ts.displayRows(false))
+	if len(rows) != 0 {
+		t.Fatalf("expected timeline row hidden until read state is loaded, got %d", len(rows))
+	}
+
+	hasLoadEffect := false
+	for _, effect := range effects {
+		if _, ok := effect.(LoadReadStateEffect); ok {
+			hasLoadEffect = true
+			break
+		}
+	}
+	if !hasLoadEffect {
+		t.Fatalf("expected read-state load effect")
+	}
+
+	next, _ = Reduce(next, ReadStateLoadedEvent{Ref: next.CurrentRef, EventIDs: []string{"e1"}, ReadIDs: nil})
+	ts = next.TimelineByRef[next.CurrentRef]
+	rows = ts.rowsReadyForDisplay(ts.displayRows(false))
+	if len(rows) != 1 {
+		t.Fatalf("expected timeline row to appear after read state load, got %d", len(rows))
+	}
+}
+
+func TestPersistReadFailureRollsBackOptimisticState(t *testing.T) {
+	state := NewState()
+	state.Focus = focusTimeline
+	state.CurrentRef = "o/r#1"
+	state.TimelineByRef[state.CurrentRef] = &timelineState{
+		ref:                state.CurrentRef,
+		rowIndexByID:       map[string]int{},
+		threadByID:         map[string]*threadGroup{},
+		expandedThreads:    map[string]bool{},
+		readByEventID:      map[string]bool{"e1": false},
+		readKnownByEventID: map[string]bool{"e1": true},
+		readLoadInFlight:   map[string]bool{},
+	}
+	ts := state.TimelineByRef[state.CurrentRef]
+	body := "b"
+	ts.insertTimelineEvent(ghpr.TimelineEvent{ID: "e1", Type: "github.timeline.commented", OccurredAt: time.Now().UTC(), Comment: &ghpr.CommentContext{Body: &body}})
+	ts.selectedID = eventRowID("e1")
+
+	next, _ := Reduce(state, KeyEvent{Key: "r"})
+	if !next.TimelineByRef[next.CurrentRef].readByEventID["e1"] {
+		t.Fatalf("expected optimistic read state")
+	}
+	if len(next.PendingRead) != 1 {
+		t.Fatalf("expected one pending read op")
+	}
+	var opID int64
+	for id := range next.PendingRead {
+		opID = id
+	}
+
+	next, _ = Reduce(next, ReadStatePersistFailedEvent{OpID: opID, Err: "boom"})
+	if next.TimelineByRef[next.CurrentRef].readByEventID["e1"] {
+		t.Fatalf("expected read state rollback after failure")
+	}
+}
+
+func TestNotificationUnreadMarkerUsesCacheWhileReadStateUnknown(t *testing.T) {
+	state := NewState()
+	state.CurrentRef = "o/r#1"
+	n := notifRow{id: "n1", repo: "o/r", ref: state.CurrentRef, title: "t"}
+	state.Notifications = []notifRow{n}
+	state.rebuildNotifIndex()
+	state.SelectedNotif = "n1"
+	state.NotifSelected = 0
+	state.TimelineByRef[state.CurrentRef] = &timelineState{
+		ref:                state.CurrentRef,
+		rowIndexByID:       map[string]int{},
+		threadByID:         map[string]*threadGroup{},
+		expandedThreads:    map[string]bool{},
+		readByEventID:      map[string]bool{},
+		readKnownByEventID: map[string]bool{},
+		readLoadInFlight:   map[string]bool{},
+	}
+	ts := state.TimelineByRef[state.CurrentRef]
+	body := "b"
+	ts.insertTimelineEvent(ghpr.TimelineEvent{ID: "e1", Type: "github.timeline.commented", OccurredAt: time.Now().UTC(), Comment: &ghpr.CommentContext{Body: &body}})
+
+	if got := state.notificationUnreadMarker(n); got != "● " {
+		t.Fatalf("expected unread marker while unknown, got %q", got)
+	}
+
+	ts.readKnownByEventID["e1"] = true
+	ts.readByEventID["e1"] = false
+	if got := state.notificationUnreadMarker(n); got != "● " {
+		t.Fatalf("expected unread marker once known, got %q", got)
+	}
+
+	ts.readKnownByEventID["e1"] = false
+	if got := state.notificationUnreadMarker(n); got != "● " {
+		t.Fatalf("expected cached unread marker while unknown again, got %q", got)
 	}
 }

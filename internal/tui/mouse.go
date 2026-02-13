@@ -145,7 +145,7 @@ func threadRowAtY(state AppState, y, width int) int {
 	if ts == nil || ts.activeThreadID == "" {
 		return -1
 	}
-	rows := ts.threadRows(ts.activeThreadID)
+	rows := ts.threadRows(ts.activeThreadID, state.HideRead)
 	if len(rows) == 0 || width <= 0 || y < 0 {
 		return -1
 	}
@@ -244,7 +244,7 @@ func timelineRowAtY(state AppState, y, width int) int {
 	if ts == nil {
 		return -1
 	}
-	rows := ts.displayRows()
+	rows := ts.displayRows(state.HideRead)
 	if len(rows) == 0 || width <= 0 {
 		return -1
 	}

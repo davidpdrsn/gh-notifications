@@ -13,7 +13,7 @@ type timelineViewportPlan struct {
 	rows     []timelineLayoutRow
 }
 
-func buildTimelineViewportPlan(ts *timelineState, width int, viewport int) timelineViewportPlan {
+func buildTimelineViewportPlan(ts *timelineState, width int, viewport int, hideRead bool) timelineViewportPlan {
 	plan := timelineViewportPlan{
 		start:    0,
 		selected: 0,
@@ -23,7 +23,7 @@ func buildTimelineViewportPlan(ts *timelineState, width int, viewport int) timel
 	if plan.avail < 1 {
 		plan.avail = 1
 	}
-	rows := ts.displayRows()
+	rows := ts.rowsReadyForDisplay(ts.displayRows(hideRead))
 	if len(rows) == 0 {
 		return plan
 	}

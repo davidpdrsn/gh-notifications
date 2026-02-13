@@ -44,6 +44,27 @@ type timelineErrMsg struct {
 	err error
 }
 
+type readStateLoadedMsg struct {
+	ref      string
+	eventIDs []string
+	readIDs  []string
+}
+
+type readStateLoadErrMsg struct {
+	ref      string
+	eventIDs []string
+	err      error
+}
+
+type readStatePersistedMsg struct {
+	opID int64
+}
+
+type readStatePersistErrMsg struct {
+	opID int64
+	err  error
+}
+
 type commitDiffLoadedMsg struct {
 	ref     string
 	eventID string
@@ -117,6 +138,18 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case timelineErrMsg:
 		asyncMsg = true
 		events = append(events, TimelineErrEvent{Generation: t.gen, Ref: t.ref, Err: t.err.Error()})
+	case readStateLoadedMsg:
+		asyncMsg = true
+		events = append(events, ReadStateLoadedEvent{Ref: t.ref, EventIDs: t.eventIDs, ReadIDs: t.readIDs})
+	case readStateLoadErrMsg:
+		asyncMsg = true
+		events = append(events, ReadStateLoadFailedEvent{Ref: t.ref, EventIDs: t.eventIDs, Err: t.err.Error()})
+	case readStatePersistedMsg:
+		asyncMsg = true
+		events = append(events, ReadStatePersistedEvent{OpID: t.opID})
+	case readStatePersistErrMsg:
+		asyncMsg = true
+		events = append(events, ReadStatePersistFailedEvent{OpID: t.opID, Err: t.err.Error()})
 	case commitDiffLoadedMsg:
 		asyncMsg = true
 		events = append(events, CommitDiffLoadedEvent{Ref: t.ref, EventID: t.eventID, Diff: t.diff})
@@ -177,8 +210,53 @@ func (m *model) applyEffects(effects []Effect) {
 			m.startForcePushInterdiffLoader(e.Ref, e.EventID)
 		case CopyColumnEffect:
 			m.startClipboardCopy(e.Column, e.Text)
+		case LoadReadStateEffect:
+			m.startReadStateLoader(e.Ref, e.EventIDs)
+		case PersistReadStateEffect:
+			m.startReadStatePersist(e.OpID, e.Ref, e.EventIDs, e.Read)
 		}
 	}
+}
+
+func (m *model) startReadStateLoader(ref string, eventIDs []string) {
+	go func() {
+		if m.store == nil {
+			m.msgCh <- readStateLoadErrMsg{ref: ref, eventIDs: eventIDs, err: errors.New("read-state store unavailable")}
+			return
+		}
+		read, err := m.store.ListRead(m.ctx, ref, eventIDs)
+		if err != nil {
+			m.msgCh <- readStateLoadErrMsg{ref: ref, eventIDs: eventIDs, err: err}
+			return
+		}
+		readIDs := make([]string, 0, len(read))
+		for id, ok := range read {
+			if ok {
+				readIDs = append(readIDs, id)
+			}
+		}
+		m.msgCh <- readStateLoadedMsg{ref: ref, eventIDs: eventIDs, readIDs: readIDs}
+	}()
+}
+
+func (m *model) startReadStatePersist(opID int64, ref string, eventIDs []string, read bool) {
+	go func() {
+		if m.store == nil {
+			m.msgCh <- readStatePersistErrMsg{opID: opID, err: errors.New("read-state store unavailable")}
+			return
+		}
+		var err error
+		if read {
+			err = m.store.MarkRead(m.ctx, ref, eventIDs)
+		} else {
+			err = m.store.MarkUnread(m.ctx, ref, eventIDs)
+		}
+		if err != nil {
+			m.msgCh <- readStatePersistErrMsg{opID: opID, err: err}
+			return
+		}
+		m.msgCh <- readStatePersistedMsg{opID: opID}
+	}()
 }
 
 func (m *model) startCommitDiffLoader(ref, eventID, diffURL string) {
