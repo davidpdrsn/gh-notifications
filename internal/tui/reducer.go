@@ -254,7 +254,7 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 		case "left", "h", "backspace":
 			clearMotionCount(&state)
 			backOut(&state)
-		case "H":
+		case "H", "shift+h", "shift+H":
 			clearMotionCount(&state)
 			state.HideRead = !state.HideRead
 		case "r":
@@ -627,14 +627,17 @@ func toggleSelectedRead(state *AppState, effects *[]Effect) {
 	targetTS := ts
 
 	var (
-		eventIDs    []string
-		currentRead bool
-		nextID      string
-		inThread    bool
+		eventIDs      []string
+		currentRead   bool
+		nextID        string
+		nextNotifID   string
+		inThread      bool
+		onRootListRow bool
 	)
 
 	switch state.Focus {
 	case focusNotifications:
+		onRootListRow = true
 		n := state.selectedNotification()
 		if n == nil {
 			return
@@ -647,6 +650,11 @@ func toggleSelectedRead(state *AppState, effects *[]Effect) {
 		eventIDs = targetTS.allEventIDs()
 		if len(eventIDs) == 0 {
 			return
+		}
+		visible := state.visibleNotifications()
+		idx := indexOfNotificationByID(visible, state.SelectedNotif)
+		if idx >= 0 && idx < len(visible)-1 {
+			nextNotifID = visible[idx+1].id
 		}
 		currentRead = true
 		for _, id := range eventIDs {
@@ -765,6 +773,14 @@ func toggleSelectedRead(state *AppState, effects *[]Effect) {
 		EventIDs: append([]string(nil), eventIDs...),
 		Read:     desiredRead,
 	})
+
+	if onRootListRow {
+		if nextNotifID != "" {
+			selectNotificationByID(state, effects, nextNotifID)
+			state.DetailScroll = 0
+		}
+		return
+	}
 
 	if nextID != "" {
 		if inThread {

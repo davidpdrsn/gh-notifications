@@ -1419,6 +1419,67 @@ func TestToggleReadFromNotificationsTogglesAllTimelineChildren(t *testing.T) {
 	}
 }
 
+func TestToggleReadFromNotificationsAdvancesToNextNotification(t *testing.T) {
+	state := NewState()
+	state.Focus = focusNotifications
+	state.Notifications = []notifRow{
+		{id: "n1", repo: "o/r", title: "first", ref: "o/r#1", updatedAt: time.Now()},
+		{id: "n2", repo: "o/r", title: "second", ref: "o/r#2", updatedAt: time.Now().Add(-time.Minute)},
+	}
+	state.rebuildNotifIndex()
+	state.SelectedNotif = "n1"
+	state.NotifSelected = 0
+	state.CurrentRef = "o/r#1"
+
+	state.TimelineByRef["o/r#1"] = &timelineState{
+		ref:                "o/r#1",
+		rowIndexByID:       map[string]int{},
+		threadByID:         map[string]*threadGroup{},
+		expandedThreads:    map[string]bool{},
+		readByEventID:      map[string]bool{"e1": false},
+		readKnownByEventID: map[string]bool{"e1": true},
+		readLoadInFlight:   map[string]bool{},
+	}
+	state.TimelineByRef["o/r#2"] = &timelineState{
+		ref:                "o/r#2",
+		rowIndexByID:       map[string]int{},
+		threadByID:         map[string]*threadGroup{},
+		expandedThreads:    map[string]bool{},
+		readByEventID:      map[string]bool{"e2": false},
+		readKnownByEventID: map[string]bool{"e2": true},
+		readLoadInFlight:   map[string]bool{},
+	}
+	body := "body"
+	state.TimelineByRef["o/r#1"].insertTimelineEvent(ghpr.TimelineEvent{ID: "e1", Type: "github.timeline.commented", OccurredAt: time.Now().UTC(), Comment: &ghpr.CommentContext{Body: &body}})
+	state.TimelineByRef["o/r#2"].insertTimelineEvent(ghpr.TimelineEvent{ID: "e2", Type: "github.timeline.commented", OccurredAt: time.Now().UTC(), Comment: &ghpr.CommentContext{Body: &body}})
+
+	next, effects := Reduce(state, KeyEvent{Key: "r"})
+
+	if !next.TimelineByRef["o/r#1"].readByEventID["e1"] {
+		t.Fatalf("expected selected notification timeline marked read")
+	}
+	if next.SelectedNotif != "n2" {
+		t.Fatalf("expected selection to advance to n2, got %q", next.SelectedNotif)
+	}
+	if next.CurrentRef != "o/r#2" {
+		t.Fatalf("expected current ref to advance to o/r#2, got %q", next.CurrentRef)
+	}
+
+	foundPersist := false
+	for _, eff := range effects {
+		switch e := eff.(type) {
+		case PersistReadStateEffect:
+			foundPersist = true
+			if e.Ref != "o/r#1" || len(e.EventIDs) != 1 || e.EventIDs[0] != "e1" || !e.Read {
+				t.Fatalf("unexpected persist payload: %+v", e)
+			}
+		}
+	}
+	if !foundPersist {
+		t.Fatalf("expected PersistReadStateEffect")
+	}
+}
+
 func TestHideReadFiltersTimelineAndThreadPane(t *testing.T) {
 	state := NewState()
 	state.Focus = focusTimeline
@@ -1456,6 +1517,72 @@ func TestHideReadFiltersTimelineAndThreadPane(t *testing.T) {
 	threadRows := next.TimelineByRef[next.CurrentRef].threadRows(threadID, next.HideRead)
 	if len(threadRows) != 0 {
 		t.Fatalf("expected all-read thread rows hidden, got %d", len(threadRows))
+	}
+}
+
+func TestHideReadFiltersReadNotificationsInRootPane(t *testing.T) {
+	state := NewState()
+	state.Focus = focusNotifications
+	state.NotifLoading = false
+	state.Notifications = []notifRow{
+		{id: "n1", ref: "o/r#1", repo: "o/r", title: "read", updatedAt: time.Now()},
+		{id: "n2", ref: "o/r#2", repo: "o/r", title: "unread", updatedAt: time.Now().Add(-time.Minute)},
+	}
+	state.rebuildNotifIndex()
+	state.SelectedNotif = "n1"
+	state.NotifSelected = 0
+	state.CurrentRef = "o/r#1"
+
+	state.TimelineByRef["o/r#1"] = &timelineState{
+		ref:                "o/r#1",
+		rowIndexByID:       map[string]int{},
+		threadByID:         map[string]*threadGroup{},
+		expandedThreads:    map[string]bool{},
+		readByEventID:      map[string]bool{"e1": true},
+		readKnownByEventID: map[string]bool{"e1": true},
+		readLoadInFlight:   map[string]bool{},
+		done:               true,
+	}
+	state.TimelineByRef["o/r#2"] = &timelineState{
+		ref:                "o/r#2",
+		rowIndexByID:       map[string]int{},
+		threadByID:         map[string]*threadGroup{},
+		expandedThreads:    map[string]bool{},
+		readByEventID:      map[string]bool{"e2": false},
+		readKnownByEventID: map[string]bool{"e2": true},
+		readLoadInFlight:   map[string]bool{},
+		done:               true,
+	}
+	body := "body"
+	state.TimelineByRef["o/r#1"].insertTimelineEvent(ghpr.TimelineEvent{ID: "e1", Type: "github.timeline.commented", OccurredAt: time.Now().UTC(), Comment: &ghpr.CommentContext{Body: &body}})
+	state.TimelineByRef["o/r#2"].insertTimelineEvent(ghpr.TimelineEvent{ID: "e2", Type: "github.timeline.commented", OccurredAt: time.Now().UTC(), Comment: &ghpr.CommentContext{Body: &body}})
+
+	next, _ := Reduce(state, KeyEvent{Key: "shift+h"})
+
+	if !next.HideRead {
+		t.Fatalf("expected hide-read enabled")
+	}
+	visible := next.visibleNotifications()
+	if len(visible) != 1 || visible[0].id != "n2" {
+		t.Fatalf("expected only unread notification visible, got %+v", visible)
+	}
+	if next.SelectedNotif != "n2" {
+		t.Fatalf("expected selection to move to first visible notification, got %q", next.SelectedNotif)
+	}
+}
+
+func TestShiftHTogglesHideReadFromRootPane(t *testing.T) {
+	state := NewState()
+	state.Focus = focusNotifications
+
+	next, _ := Reduce(state, KeyEvent{Key: "shift+h"})
+	if !next.HideRead {
+		t.Fatalf("expected shift+h to toggle hide-read on")
+	}
+
+	next, _ = Reduce(next, KeyEvent{Key: "shift+h"})
+	if next.HideRead {
+		t.Fatalf("expected shift+h to toggle hide-read off")
 	}
 }
 

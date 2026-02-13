@@ -293,14 +293,18 @@ func (s *AppState) activeNotificationTab() string {
 
 func (s *AppState) visibleNotifications() []notifRow {
 	tab := s.activeNotificationTab()
-	if tab == allNotificationsTab {
-		return s.Notifications
-	}
 	rows := make([]notifRow, 0, len(s.Notifications))
 	for _, n := range s.Notifications {
-		if notificationOrgFromRepo(n.repo) == tab {
-			rows = append(rows, n)
+		if tab != allNotificationsTab && notificationOrgFromRepo(n.repo) != tab {
+			continue
 		}
+		if s.HideRead {
+			known, read := s.notificationReadState(n)
+			if known && read {
+				continue
+			}
+		}
+		rows = append(rows, n)
 	}
 	return rows
 }
