@@ -47,7 +47,12 @@ CREATE TABLE IF NOT EXISTS event_read_state (
   PRIMARY KEY (ref, event_id)
 );
 CREATE INDEX IF NOT EXISTS idx_event_read_state_read_at
-  ON event_read_state(read_at);`
+  ON event_read_state(read_at);
+CREATE TABLE IF NOT EXISTS parent_read_state (
+  ref     TEXT NOT NULL PRIMARY KEY,
+  read_at TEXT NOT NULL,
+  source  TEXT NOT NULL
+);`
 	_, err := s.execSQL(ctx, schema)
 	if err != nil {
 		return fmt.Errorf("migrate read-state schema: %w", err)
@@ -148,6 +153,83 @@ func (s *Store) ListRead(ctx context.Context, ref string, eventIDs []string) (ma
 	stdout, err := s.execSQL(ctx, b.String())
 	if err != nil {
 		return out, fmt.Errorf("list read events: %w", err)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(stdout), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		out[line] = true
+	}
+	return out, nil
+}
+
+func (s *Store) MarkParentRead(ctx context.Context, ref string) error {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return fmt.Errorf("ref is empty")
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	var b strings.Builder
+	b.WriteString("INSERT INTO parent_read_state(ref, read_at, source) VALUES(")
+	b.WriteString(sqlQuote(ref))
+	b.WriteString(",")
+	b.WriteString(sqlQuote(now))
+	b.WriteString(",")
+	b.WriteString(sqlQuote("manual"))
+	b.WriteString(") ON CONFLICT(ref) DO UPDATE SET read_at=excluded.read_at, source=excluded.source;")
+
+	if _, err := s.execSQL(ctx, b.String()); err != nil {
+		return fmt.Errorf("mark parent as read: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) MarkParentUnread(ctx context.Context, ref string) error {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return fmt.Errorf("ref is empty")
+	}
+	var b strings.Builder
+	b.WriteString("DELETE FROM parent_read_state WHERE ref=")
+	b.WriteString(sqlQuote(ref))
+	b.WriteString(";")
+
+	if _, err := s.execSQL(ctx, b.String()); err != nil {
+		return fmt.Errorf("mark parent as unread: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) ListParentRead(ctx context.Context, refs []string) (map[string]bool, error) {
+	out := make(map[string]bool)
+	filtered := make([]string, 0, len(refs))
+	seen := make(map[string]bool, len(refs))
+	for _, ref := range refs {
+		ref = strings.TrimSpace(ref)
+		if ref == "" || seen[ref] {
+			continue
+		}
+		seen[ref] = true
+		filtered = append(filtered, ref)
+	}
+	if len(filtered) == 0 {
+		return out, nil
+	}
+
+	var b strings.Builder
+	b.WriteString("SELECT ref FROM parent_read_state WHERE ref IN (")
+	for i, ref := range filtered {
+		if i > 0 {
+			b.WriteString(",")
+		}
+		b.WriteString(sqlQuote(ref))
+	}
+	b.WriteString(");")
+
+	stdout, err := s.execSQL(ctx, b.String())
+	if err != nil {
+		return out, fmt.Errorf("list read parents: %w", err)
 	}
 	for _, line := range strings.Split(strings.TrimSpace(stdout), "\n") {
 		line = strings.TrimSpace(line)

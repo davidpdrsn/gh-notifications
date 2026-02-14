@@ -148,11 +148,17 @@ type AppState struct {
 	RefreshTimelinePrevByRef   map[string]*timelineState
 	RefreshTimelineAnchorByRef map[string]timelineRefreshAnchor
 
-	DetailScroll     int
-	NextReadOpID     int64
-	PendingRead      map[int64]pendingReadOp
-	MotionCount      string
-	notifMarkerByRef map[string]string
+	DetailScroll                int
+	NextReadOpID                int64
+	PendingRead                 map[int64]pendingReadOp
+	PendingParentRead           map[int64]pendingParentReadOp
+	ParentReadByRef             map[string]bool
+	ParentReadLoadedByRef       map[string]bool
+	ParentReadLoadInFlightByRef map[string]bool
+	ReadThroughRef              string
+	ReadThroughIDs              map[string]bool
+	MotionCount                 string
+	notifMarkerByRef            map[string]string
 }
 
 type pendingReadOp struct {
@@ -163,19 +169,31 @@ type pendingReadOp struct {
 	prevKnown map[string]bool
 }
 
+type pendingParentReadOp struct {
+	ref        string
+	read       bool
+	prevLoaded bool
+	prevRead   bool
+}
+
 func NewState() AppState {
 	return AppState{
-		Focus:                      focusNotifications,
-		NotifGen:                   1,
-		NotifIndexByID:             make(map[string]int),
-		NotifLoading:               true,
-		NotifTab:                   allNotificationsTab,
-		TimelineByRef:              make(map[string]*timelineState),
-		RefreshNotifSeen:           make(map[string]bool),
-		RefreshTimelinePrevByRef:   make(map[string]*timelineState),
-		RefreshTimelineAnchorByRef: make(map[string]timelineRefreshAnchor),
-		PendingRead:                make(map[int64]pendingReadOp),
-		notifMarkerByRef:           make(map[string]string),
+		Focus:                       focusNotifications,
+		NotifGen:                    1,
+		NotifIndexByID:              make(map[string]int),
+		NotifLoading:                true,
+		NotifTab:                    allNotificationsTab,
+		TimelineByRef:               make(map[string]*timelineState),
+		RefreshNotifSeen:            make(map[string]bool),
+		RefreshTimelinePrevByRef:    make(map[string]*timelineState),
+		RefreshTimelineAnchorByRef:  make(map[string]timelineRefreshAnchor),
+		PendingRead:                 make(map[int64]pendingReadOp),
+		PendingParentRead:           make(map[int64]pendingParentReadOp),
+		ParentReadByRef:             make(map[string]bool),
+		ParentReadLoadedByRef:       make(map[string]bool),
+		ParentReadLoadInFlightByRef: make(map[string]bool),
+		ReadThroughIDs:              make(map[string]bool),
+		notifMarkerByRef:            make(map[string]string),
 	}
 }
 
@@ -699,6 +717,9 @@ func (ts *timelineState) allEventIDs() []string {
 }
 
 func (s *AppState) notificationReadState(n notifRow) (known bool, read bool) {
+	if s.ParentReadByRef[n.ref] {
+		return true, true
+	}
 	ts := s.TimelineByRef[n.ref]
 	if ts == nil {
 		return false, false

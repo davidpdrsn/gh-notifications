@@ -62,6 +62,21 @@ type ReadStatePersistFailedEvent struct {
 	OpID int64
 	Err  string
 }
+type ParentReadStateLoadedEvent struct {
+	Refs     []string
+	ReadRefs []string
+}
+type ParentReadStateLoadFailedEvent struct {
+	Refs []string
+	Err  string
+}
+type ParentReadStatePersistedEvent struct {
+	OpID int64
+}
+type ParentReadStatePersistFailedEvent struct {
+	OpID int64
+	Err  string
+}
 type CommitDiffLoadedEvent struct {
 	Ref     string
 	EventID string
@@ -111,22 +126,26 @@ type MouseWheelEvent struct {
 type AutoRefreshTickEvent struct{}
 type RefreshSpinnerTickEvent struct{}
 
-func (InitEvent) isEvent()                   {}
-func (WindowSizeEvent) isEvent()             {}
-func (KeyEvent) isEvent()                    {}
-func (NotificationsArrivedEvent) isEvent()   {}
-func (NotificationsDoneEvent) isEvent()      {}
-func (NotificationsErrEvent) isEvent()       {}
-func (TimelineArrivedEvent) isEvent()        {}
-func (TimelineWarnEvent) isEvent()           {}
-func (TimelineDoneEvent) isEvent()           {}
-func (TimelineErrEvent) isEvent()            {}
-func (ReadStateLoadedEvent) isEvent()        {}
-func (ReadStateLoadFailedEvent) isEvent()    {}
-func (ReadStatePersistedEvent) isEvent()     {}
-func (ReadStatePersistFailedEvent) isEvent() {}
-func (CommitDiffLoadedEvent) isEvent()       {}
-func (CommitDiffErrEvent) isEvent()          {}
+func (InitEvent) isEvent()                         {}
+func (WindowSizeEvent) isEvent()                   {}
+func (KeyEvent) isEvent()                          {}
+func (NotificationsArrivedEvent) isEvent()         {}
+func (NotificationsDoneEvent) isEvent()            {}
+func (NotificationsErrEvent) isEvent()             {}
+func (TimelineArrivedEvent) isEvent()              {}
+func (TimelineWarnEvent) isEvent()                 {}
+func (TimelineDoneEvent) isEvent()                 {}
+func (TimelineErrEvent) isEvent()                  {}
+func (ReadStateLoadedEvent) isEvent()              {}
+func (ReadStateLoadFailedEvent) isEvent()          {}
+func (ReadStatePersistedEvent) isEvent()           {}
+func (ReadStatePersistFailedEvent) isEvent()       {}
+func (ParentReadStateLoadedEvent) isEvent()        {}
+func (ParentReadStateLoadFailedEvent) isEvent()    {}
+func (ParentReadStatePersistedEvent) isEvent()     {}
+func (ParentReadStatePersistFailedEvent) isEvent() {}
+func (CommitDiffLoadedEvent) isEvent()             {}
+func (CommitDiffErrEvent) isEvent()                {}
 func (ForcePushInterdiffLoadedEvent) isEvent() {
 }
 func (ForcePushInterdiffErrEvent) isEvent() {}
@@ -169,6 +188,12 @@ type PersistReadStateEffect struct {
 	EventIDs []string
 	Read     bool
 }
+type LoadParentReadStateEffect struct{ Refs []string }
+type PersistParentReadStateEffect struct {
+	OpID int64
+	Ref  string
+	Read bool
+}
 type OpenURLEffect struct{ URL string }
 type ScheduleAutoRefreshTickEffect struct{}
 type ScheduleRefreshSpinnerTickEffect struct{}
@@ -179,10 +204,12 @@ func (CancelTimelineEffect) isEffect()     {}
 func (StartCommitDiffEffect) isEffect()    {}
 func (StartForcePushInterdiffEffect) isEffect() {
 }
-func (CopyColumnEffect) isEffect()       {}
-func (LoadReadStateEffect) isEffect()    {}
-func (PersistReadStateEffect) isEffect() {}
-func (OpenURLEffect) isEffect()          {}
+func (CopyColumnEffect) isEffect()             {}
+func (LoadReadStateEffect) isEffect()          {}
+func (PersistReadStateEffect) isEffect()       {}
+func (LoadParentReadStateEffect) isEffect()    {}
+func (PersistParentReadStateEffect) isEffect() {}
+func (OpenURLEffect) isEffect()                {}
 func (ScheduleAutoRefreshTickEffect) isEffect() {
 }
 func (ScheduleRefreshSpinnerTickEffect) isEffect() {
@@ -291,6 +318,7 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 		}
 	case NotificationsArrivedEvent:
 		if e.Generation == state.NotifGen {
+			queueParentReadStateLoadsForRefs(&state, &effects, []string{e.Item.Target.Ref})
 			if state.RefreshInFlight && state.RefreshStage == "notifications" {
 				insertRefreshNotification(&state, e.Item)
 				break
@@ -314,6 +342,7 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 		if e.Generation == state.NotifGen {
 			if state.RefreshInFlight && state.RefreshStage == "notifications" {
 				commitRefreshNotifications(&state)
+				queueParentReadStateLoadsForRefs(&state, &effects, visibleRefs(state.visibleNotifications()))
 				finishRefresh(&state, &effects)
 				break
 			}
@@ -337,9 +366,19 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 			if ts != nil {
 				ensureReadStateMaps(ts)
 				ts.insertTimelineEvent(e.Event)
-				if e.Event.ID != "" && !ts.readKnownByEventID[e.Event.ID] && !ts.readLoadInFlight[e.Event.ID] {
-					ts.readLoadInFlight[e.Event.ID] = true
-					effects = append(effects, LoadReadStateEffect{Ref: e.Ref, EventIDs: []string{e.Event.ID}})
+				if e.Event.ID != "" {
+					if state.ReadThroughRef == e.Ref {
+						ts.readByEventID[e.Event.ID] = true
+						ts.readKnownByEventID[e.Event.ID] = true
+						delete(ts.readLoadInFlight, e.Event.ID)
+						if state.ReadThroughIDs == nil {
+							state.ReadThroughIDs = make(map[string]bool)
+						}
+						state.ReadThroughIDs[e.Event.ID] = true
+					} else if !ts.readKnownByEventID[e.Event.ID] && !ts.readLoadInFlight[e.Event.ID] {
+						ts.readLoadInFlight[e.Event.ID] = true
+						effects = append(effects, LoadReadStateEffect{Ref: e.Ref, EventIDs: []string{e.Event.ID}})
+					}
 				}
 			}
 		}
@@ -355,6 +394,12 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 			if ts != nil {
 				ts.loading = false
 				ts.done = true
+				if state.ReadThroughRef == e.Ref {
+					persistReadThroughIDs(&state, &effects, e.Ref)
+					state.ReadThroughRef = ""
+					state.ReadThroughIDs = make(map[string]bool)
+					resumeSelectedTimelineAfterReadThrough(&state, &effects, e.Ref)
+				}
 				if state.RefreshInFlight && state.RefreshStage == "timeline" && state.RefreshActiveRef == e.Ref {
 					applyTimelineRefreshSelectionFallback(&state, ts, e.Ref)
 					startNextRefreshStep(&state, &effects)
@@ -370,6 +415,11 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 			if ts != nil {
 				ts.loading = false
 				ts.err = e.Err
+				if state.ReadThroughRef == e.Ref {
+					state.ReadThroughRef = ""
+					state.ReadThroughIDs = make(map[string]bool)
+					resumeSelectedTimelineAfterReadThrough(&state, &effects, e.Ref)
+				}
 				if state.RefreshInFlight && state.RefreshStage == "timeline" && state.RefreshActiveRef == e.Ref {
 					if prev, ok := state.RefreshTimelinePrevByRef[e.Ref]; ok && prev != nil {
 						state.TimelineByRef[e.Ref] = prev
@@ -431,6 +481,52 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 		if pending.ref == state.CurrentRef {
 			state.Status = "failed to persist read state: " + e.Err
 		}
+	case ParentReadStateLoadedEvent:
+		readSet := make(map[string]bool, len(e.ReadRefs))
+		for _, ref := range e.ReadRefs {
+			ref = strings.TrimSpace(ref)
+			if ref == "" {
+				continue
+			}
+			readSet[ref] = true
+		}
+		for _, ref := range e.Refs {
+			ref = strings.TrimSpace(ref)
+			if ref == "" {
+				continue
+			}
+			delete(state.ParentReadLoadInFlightByRef, ref)
+			state.ParentReadLoadedByRef[ref] = true
+			if readSet[ref] {
+				state.ParentReadByRef[ref] = true
+			} else {
+				delete(state.ParentReadByRef, ref)
+			}
+		}
+	case ParentReadStateLoadFailedEvent:
+		for _, ref := range e.Refs {
+			ref = strings.TrimSpace(ref)
+			if ref == "" {
+				continue
+			}
+			delete(state.ParentReadLoadInFlightByRef, ref)
+		}
+		state.Status = "failed to load parent read state: " + e.Err
+	case ParentReadStatePersistedEvent:
+		delete(state.PendingParentRead, e.OpID)
+	case ParentReadStatePersistFailedEvent:
+		pending, ok := state.PendingParentRead[e.OpID]
+		if !ok {
+			break
+		}
+		delete(state.PendingParentRead, e.OpID)
+		state.ParentReadLoadedByRef[pending.ref] = pending.prevLoaded
+		if pending.prevRead {
+			state.ParentReadByRef[pending.ref] = true
+		} else {
+			delete(state.ParentReadByRef, pending.ref)
+		}
+		state.Status = "failed to persist parent read state: " + e.Err
 	case CommitDiffLoadedEvent:
 		if ts := state.TimelineByRef[e.Ref]; ts != nil {
 			if ts.commitDiffByID == nil {
@@ -660,12 +756,10 @@ func toggleSelectedRead(state *AppState, effects *[]Effect) {
 		targetRef = n.ref
 		targetTS = state.TimelineByRef[targetRef]
 		if targetTS == nil {
-			return
+			ensureTimelineState(state, targetRef)
+			targetTS = state.TimelineByRef[targetRef]
 		}
 		eventIDs = targetTS.allEventIDs()
-		if len(eventIDs) == 0 {
-			return
-		}
 		visible := state.visibleNotifications()
 		idx := indexOfNotificationByID(visible, state.SelectedNotif)
 		if idx >= 0 && idx < len(visible)-1 {
@@ -755,9 +849,28 @@ func toggleSelectedRead(state *AppState, effects *[]Effect) {
 	ensureReadStateMaps(targetTS)
 
 	if len(eventIDs) == 0 {
+		if onRootListRow {
+			desiredRead := true
+			setParentReadOverride(state, effects, targetRef, true)
+			beginReadThrough(state, effects, targetRef, targetTS, desiredRead)
+			if nextNotifID != "" {
+				selectNotificationByID(state, effects, nextNotifID)
+				state.DetailScroll = 0
+			}
+		}
 		return
 	}
 	desiredRead := !currentRead
+	if onRootListRow && desiredRead {
+		setParentReadOverride(state, effects, targetRef, true)
+		beginReadThrough(state, effects, targetRef, targetTS, desiredRead)
+	}
+	if onRootListRow && !desiredRead {
+		setParentReadOverride(state, effects, targetRef, false)
+	}
+	if !onRootListRow && !desiredRead {
+		setParentReadOverride(state, effects, targetRef, false)
+	}
 
 	state.NextReadOpID++
 	opID := state.NextReadOpID
@@ -1749,6 +1862,12 @@ func selectNotificationByID(state *AppState, effects *[]Effect, id string) {
 		}
 		return
 	}
+	if state.ReadThroughRef != "" && state.TimelineLoadingRef == state.ReadThroughRef {
+		if state.CurrentRef != "" {
+			ensureTimelineState(state, state.CurrentRef)
+		}
+		return
+	}
 	if state.CurrentRef != prevRef {
 		state.TimelineGen++
 		*effects = append(*effects, CancelTimelineEffect{})
@@ -1769,6 +1888,175 @@ func selectNotificationByID(state *AppState, effects *[]Effect, id string) {
 		ts.done = false
 		ts.err = ""
 	}
+}
+
+func beginReadThrough(state *AppState, effects *[]Effect, ref string, ts *timelineState, desiredRead bool) {
+	if !desiredRead || strings.TrimSpace(ref) == "" {
+		return
+	}
+	if ts == nil {
+		ensureTimelineState(state, ref)
+		ts = state.TimelineByRef[ref]
+	}
+	if ts == nil {
+		return
+	}
+	if state.notifMarkerByRef == nil {
+		state.notifMarkerByRef = make(map[string]string)
+	}
+	state.notifMarkerByRef[ref] = "    "
+
+	if ts.done {
+		return
+	}
+	state.ReadThroughRef = ref
+	if state.ReadThroughIDs == nil {
+		state.ReadThroughIDs = make(map[string]bool)
+	} else {
+		clear(state.ReadThroughIDs)
+	}
+
+	if state.TimelineLoadingRef == ref {
+		return
+	}
+	state.TimelineGen++
+	state.TimelineLoadingRef = ref
+	ts.loading = true
+	ts.done = false
+	ts.err = ""
+	*effects = append(*effects,
+		CancelTimelineEffect{},
+		StartTimelineEffect{Generation: state.TimelineGen, Ref: ref},
+	)
+}
+
+func queueParentReadStateLoadsForRefs(state *AppState, effects *[]Effect, refs []string) {
+	if state.ParentReadLoadedByRef == nil {
+		state.ParentReadLoadedByRef = make(map[string]bool)
+	}
+	if state.ParentReadLoadInFlightByRef == nil {
+		state.ParentReadLoadInFlightByRef = make(map[string]bool)
+	}
+	toLoad := make([]string, 0, len(refs))
+	seen := make(map[string]bool, len(refs))
+	for _, ref := range refs {
+		ref = strings.TrimSpace(ref)
+		if ref == "" || seen[ref] || state.ParentReadLoadedByRef[ref] || state.ParentReadLoadInFlightByRef[ref] {
+			continue
+		}
+		seen[ref] = true
+		state.ParentReadLoadInFlightByRef[ref] = true
+		toLoad = append(toLoad, ref)
+	}
+	if len(toLoad) == 0 {
+		return
+	}
+	*effects = append(*effects, LoadParentReadStateEffect{Refs: toLoad})
+}
+
+func visibleRefs(rows []notifRow) []string {
+	refs := make([]string, 0, len(rows))
+	for _, n := range rows {
+		if strings.TrimSpace(n.ref) == "" {
+			continue
+		}
+		refs = append(refs, n.ref)
+	}
+	return refs
+}
+
+func setParentReadOverride(state *AppState, effects *[]Effect, ref string, read bool) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return
+	}
+	if state.ParentReadByRef == nil {
+		state.ParentReadByRef = make(map[string]bool)
+	}
+	if state.ParentReadLoadedByRef == nil {
+		state.ParentReadLoadedByRef = make(map[string]bool)
+	}
+	if state.PendingParentRead == nil {
+		state.PendingParentRead = make(map[int64]pendingParentReadOp)
+	}
+	prevLoaded := state.ParentReadLoadedByRef[ref]
+	prevRead := state.ParentReadByRef[ref]
+	if prevLoaded && prevRead == read {
+		return
+	}
+	state.ParentReadLoadedByRef[ref] = true
+	if read {
+		state.ParentReadByRef[ref] = true
+	} else {
+		delete(state.ParentReadByRef, ref)
+	}
+
+	state.NextReadOpID++
+	opID := state.NextReadOpID
+	state.PendingParentRead[opID] = pendingParentReadOp{ref: ref, read: read, prevLoaded: prevLoaded, prevRead: prevRead}
+	*effects = append(*effects, PersistParentReadStateEffect{OpID: opID, Ref: ref, Read: read})
+}
+
+func persistReadThroughIDs(state *AppState, effects *[]Effect, ref string) {
+	if strings.TrimSpace(ref) == "" || len(state.ReadThroughIDs) == 0 {
+		return
+	}
+	ts := state.TimelineByRef[ref]
+	if ts == nil {
+		return
+	}
+	ensureReadStateMaps(ts)
+
+	ids := make([]string, 0, len(state.ReadThroughIDs))
+	for id := range state.ReadThroughIDs {
+		if strings.TrimSpace(id) == "" {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		return
+	}
+
+	state.NextReadOpID++
+	opID := state.NextReadOpID
+	if state.PendingRead == nil {
+		state.PendingRead = make(map[int64]pendingReadOp)
+	}
+	prevRead := make(map[string]bool, len(ids))
+	prevKnown := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		prevRead[id] = ts.readByEventID[id]
+		prevKnown[id] = ts.readKnownByEventID[id]
+		ts.readByEventID[id] = true
+		ts.readKnownByEventID[id] = true
+	}
+	state.PendingRead[opID] = pendingReadOp{
+		ref:       ref,
+		eventIDs:  append([]string(nil), ids...),
+		read:      true,
+		prevRead:  prevRead,
+		prevKnown: prevKnown,
+	}
+	*effects = append(*effects, PersistReadStateEffect{OpID: opID, Ref: ref, EventIDs: append([]string(nil), ids...), Read: true})
+}
+
+func resumeSelectedTimelineAfterReadThrough(state *AppState, effects *[]Effect, completedRef string) {
+	if state.RefreshInFlight || state.CurrentRef == "" || state.CurrentRef == completedRef {
+		return
+	}
+	ensureTimelineState(state, state.CurrentRef)
+	ts := state.TimelineByRef[state.CurrentRef]
+	queueReadStateLoadsForUnknown(ts, state.CurrentRef, effects)
+	if ts == nil || ts.done {
+		return
+	}
+	state.TimelineGen++
+	state.TimelineLoadingRef = state.CurrentRef
+	ts.loading = true
+	ts.done = false
+	ts.err = ""
+	*effects = append(*effects, StartTimelineEffect{Generation: state.TimelineGen, Ref: state.CurrentRef})
 }
 
 func queueReadStateLoadsForUnknown(ts *timelineState, ref string, effects *[]Effect) {
@@ -2108,12 +2396,18 @@ func markSelectedNotificationRead(state *AppState, effects *[]Effect) {
 	if n == nil {
 		return
 	}
+	setParentReadOverride(state, effects, n.ref, true)
 	ts := state.TimelineByRef[n.ref]
+	if ts == nil {
+		ensureTimelineState(state, n.ref)
+		ts = state.TimelineByRef[n.ref]
+	}
 	if ts == nil {
 		return
 	}
 	eventIDs := ts.allEventIDs()
 	if len(eventIDs) == 0 {
+		beginReadThrough(state, effects, n.ref, ts, true)
 		return
 	}
 
@@ -2161,6 +2455,7 @@ func markSelectedNotificationRead(state *AppState, effects *[]Effect) {
 		EventIDs: append([]string(nil), eventIDs...),
 		Read:     true,
 	})
+	beginReadThrough(state, effects, n.ref, ts, true)
 }
 
 func selectedBrowserURL(state AppState) string {

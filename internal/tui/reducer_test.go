@@ -1592,6 +1592,153 @@ func TestToggleReadFromNotificationsAdvancesToNextNotification(t *testing.T) {
 	}
 }
 
+func TestToggleReadFromNotificationsContinuesLoadingAndMarksLateChildrenRead(t *testing.T) {
+	state := NewState()
+	state.Focus = focusNotifications
+	state.Notifications = []notifRow{
+		{id: "n1", repo: "o/r", title: "first", ref: "o/r#1", updatedAt: time.Now()},
+		{id: "n2", repo: "o/r", title: "second", ref: "o/r#2", updatedAt: time.Now().Add(-time.Minute)},
+	}
+	state.rebuildNotifIndex()
+	state.SelectedNotif = "n1"
+	state.NotifSelected = 0
+	state.CurrentRef = "o/r#1"
+	state.TimelineGen = 1
+
+	state.TimelineByRef["o/r#1"] = &timelineState{
+		ref:                "o/r#1",
+		rowIndexByID:       map[string]int{},
+		threadByID:         map[string]*threadGroup{},
+		expandedThreads:    map[string]bool{},
+		readByEventID:      map[string]bool{"e1": false},
+		readKnownByEventID: map[string]bool{"e1": true},
+		readLoadInFlight:   map[string]bool{},
+		done:               false,
+		loading:            true,
+	}
+	body := "body"
+	state.TimelineByRef["o/r#1"].insertTimelineEvent(ghpr.TimelineEvent{ID: "e1", Type: "github.timeline.commented", OccurredAt: time.Now().UTC(), Comment: &ghpr.CommentContext{Body: &body}})
+
+	next, effects := Reduce(state, KeyEvent{Key: "r"})
+
+	if next.SelectedNotif != "n2" {
+		t.Fatalf("expected selection to advance to n2, got %q", next.SelectedNotif)
+	}
+	if next.ReadThroughRef != "o/r#1" {
+		t.Fatalf("expected read-through ref to stay on first notification, got %q", next.ReadThroughRef)
+	}
+	if next.TimelineLoadingRef != "o/r#1" {
+		t.Fatalf("expected timeline loader to remain on first notification, got %q", next.TimelineLoadingRef)
+	}
+	for _, eff := range effects {
+		if start, ok := eff.(StartTimelineEffect); ok && start.Ref == "o/r#2" {
+			t.Fatalf("did not expect selection change to start next notification timeline while read-through is active")
+		}
+	}
+
+	gen := next.TimelineGen
+	next, _ = Reduce(next, TimelineArrivedEvent{Generation: gen, Ref: "o/r#1", Event: ghpr.TimelineEvent{ID: "e2", Type: "github.timeline.commented", OccurredAt: time.Now().UTC().Add(time.Minute), Comment: &ghpr.CommentContext{Body: &body}}})
+	if !next.TimelineByRef["o/r#1"].readByEventID["e2"] || !next.TimelineByRef["o/r#1"].readKnownByEventID["e2"] {
+		t.Fatalf("expected late-arriving child event to be marked read")
+	}
+
+	next, doneEffects := Reduce(next, TimelineDoneEvent{Generation: gen, Ref: "o/r#1"})
+	if next.ReadThroughRef != "" {
+		t.Fatalf("expected read-through to finish after timeline done")
+	}
+	foundPersistLate := false
+	foundResumeCurrent := false
+	for _, eff := range doneEffects {
+		switch e := eff.(type) {
+		case PersistReadStateEffect:
+			if e.Ref == "o/r#1" {
+				for _, id := range e.EventIDs {
+					if id == "e2" {
+						foundPersistLate = true
+						break
+					}
+				}
+			}
+		case StartTimelineEffect:
+			if e.Ref == "o/r#2" {
+				foundResumeCurrent = true
+			}
+		}
+	}
+	if !foundPersistLate {
+		t.Fatalf("expected read-through to persist late-arriving child event")
+	}
+	if !foundResumeCurrent {
+		t.Fatalf("expected selected notification timeline load to resume after read-through")
+	}
+}
+
+func TestRootMarkReadSetsParentOverrideImmediately(t *testing.T) {
+	state := NewState()
+	state.Focus = focusNotifications
+	state.Notifications = []notifRow{{id: "n1", repo: "o/r", title: "first", ref: "o/r#1", updatedAt: time.Now()}}
+	state.rebuildNotifIndex()
+	state.SelectedNotif = "n1"
+	state.NotifSelected = 0
+	state.CurrentRef = "o/r#1"
+	state.TimelineByRef["o/r#1"] = &timelineState{ref: "o/r#1", rowIndexByID: map[string]int{}, threadByID: map[string]*threadGroup{}, expandedThreads: map[string]bool{}, done: false}
+
+	next, effects := Reduce(state, KeyEvent{Key: "r"})
+
+	if !next.ParentReadByRef["o/r#1"] {
+		t.Fatalf("expected parent read override to be set immediately")
+	}
+	foundPersistParent := false
+	for _, eff := range effects {
+		if p, ok := eff.(PersistParentReadStateEffect); ok {
+			if p.Ref == "o/r#1" && p.Read {
+				foundPersistParent = true
+			}
+		}
+	}
+	if !foundPersistParent {
+		t.Fatalf("expected PersistParentReadStateEffect for root mark-read")
+	}
+}
+
+func TestChildUnreadClearsParentOverride(t *testing.T) {
+	state := NewState()
+	state.Focus = focusTimeline
+	state.CurrentRef = "o/r#1"
+	state.ParentReadByRef["o/r#1"] = true
+	state.ParentReadLoadedByRef["o/r#1"] = true
+	state.TimelineByRef["o/r#1"] = &timelineState{
+		ref:                "o/r#1",
+		rowIndexByID:       map[string]int{},
+		threadByID:         map[string]*threadGroup{},
+		expandedThreads:    map[string]bool{},
+		readByEventID:      map[string]bool{"e1": true},
+		readKnownByEventID: map[string]bool{"e1": true},
+		readLoadInFlight:   map[string]bool{},
+		done:               true,
+	}
+	body := "body"
+	state.TimelineByRef["o/r#1"].insertTimelineEvent(ghpr.TimelineEvent{ID: "e1", Type: "github.timeline.commented", OccurredAt: time.Now().UTC(), Comment: &ghpr.CommentContext{Body: &body}})
+	state.TimelineByRef["o/r#1"].selectedID = eventRowID("e1")
+
+	next, effects := Reduce(state, KeyEvent{Key: "r"})
+
+	if next.ParentReadByRef["o/r#1"] {
+		t.Fatalf("expected child unread toggle to clear parent read override")
+	}
+	foundPersistParentUnread := false
+	for _, eff := range effects {
+		if p, ok := eff.(PersistParentReadStateEffect); ok {
+			if p.Ref == "o/r#1" && !p.Read {
+				foundPersistParentUnread = true
+			}
+		}
+	}
+	if !foundPersistParentUnread {
+		t.Fatalf("expected PersistParentReadStateEffect unread when child toggled unread")
+	}
+}
+
 func TestOpenKeyFromNotificationsUsesTargetURL(t *testing.T) {
 	state := NewState()
 	state.Focus = focusNotifications

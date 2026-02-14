@@ -66,6 +66,25 @@ type readStatePersistErrMsg struct {
 	err  error
 }
 
+type parentReadStateLoadedMsg struct {
+	refs     []string
+	readRefs []string
+}
+
+type parentReadStateLoadErrMsg struct {
+	refs []string
+	err  error
+}
+
+type parentReadStatePersistedMsg struct {
+	opID int64
+}
+
+type parentReadStatePersistErrMsg struct {
+	opID int64
+	err  error
+}
+
 type commitDiffLoadedMsg struct {
 	ref     string
 	eventID string
@@ -159,6 +178,18 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case readStatePersistErrMsg:
 		asyncMsg = true
 		events = append(events, ReadStatePersistFailedEvent{OpID: t.opID, Err: t.err.Error()})
+	case parentReadStateLoadedMsg:
+		asyncMsg = true
+		events = append(events, ParentReadStateLoadedEvent{Refs: t.refs, ReadRefs: t.readRefs})
+	case parentReadStateLoadErrMsg:
+		asyncMsg = true
+		events = append(events, ParentReadStateLoadFailedEvent{Refs: t.refs, Err: t.err.Error()})
+	case parentReadStatePersistedMsg:
+		asyncMsg = true
+		events = append(events, ParentReadStatePersistedEvent{OpID: t.opID})
+	case parentReadStatePersistErrMsg:
+		asyncMsg = true
+		events = append(events, ParentReadStatePersistFailedEvent{OpID: t.opID, Err: t.err.Error()})
 	case commitDiffLoadedMsg:
 		asyncMsg = true
 		events = append(events, CommitDiffLoadedEvent{Ref: t.ref, EventID: t.eventID, Diff: t.diff})
@@ -244,6 +275,10 @@ func (m *model) applyEffects(effects []Effect) {
 			m.startReadStateLoader(e.Ref, e.EventIDs)
 		case PersistReadStateEffect:
 			m.startReadStatePersist(e.OpID, e.Ref, e.EventIDs, e.Read)
+		case LoadParentReadStateEffect:
+			m.startParentReadStateLoader(e.Refs)
+		case PersistParentReadStateEffect:
+			m.startParentReadStatePersist(e.OpID, e.Ref, e.Read)
 		case ScheduleAutoRefreshTickEffect:
 			m.scheduleAutoRefreshTick()
 		case ScheduleRefreshSpinnerTickEffect:
@@ -316,6 +351,47 @@ func (m *model) startReadStatePersist(opID int64, ref string, eventIDs []string,
 			return
 		}
 		m.msgCh <- readStatePersistedMsg{opID: opID}
+	}()
+}
+
+func (m *model) startParentReadStateLoader(refs []string) {
+	go func() {
+		if m.store == nil {
+			m.msgCh <- parentReadStateLoadErrMsg{refs: refs, err: errors.New("read-state store unavailable")}
+			return
+		}
+		read, err := m.store.ListParentRead(m.ctx, refs)
+		if err != nil {
+			m.msgCh <- parentReadStateLoadErrMsg{refs: refs, err: err}
+			return
+		}
+		readRefs := make([]string, 0, len(read))
+		for ref, ok := range read {
+			if ok {
+				readRefs = append(readRefs, ref)
+			}
+		}
+		m.msgCh <- parentReadStateLoadedMsg{refs: refs, readRefs: readRefs}
+	}()
+}
+
+func (m *model) startParentReadStatePersist(opID int64, ref string, read bool) {
+	go func() {
+		if m.store == nil {
+			m.msgCh <- parentReadStatePersistErrMsg{opID: opID, err: errors.New("read-state store unavailable")}
+			return
+		}
+		var err error
+		if read {
+			err = m.store.MarkParentRead(m.ctx, ref)
+		} else {
+			err = m.store.MarkParentUnread(m.ctx, ref)
+		}
+		if err != nil {
+			m.msgCh <- parentReadStatePersistErrMsg{opID: opID, err: err}
+			return
+		}
+		m.msgCh <- parentReadStatePersistedMsg{opID: opID}
 	}()
 }
 
