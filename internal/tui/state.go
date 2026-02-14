@@ -755,32 +755,35 @@ func (ts *timelineState) allEventIDs() []string {
 }
 
 func (s *AppState) notificationReadState(n notifRow) (known bool, read bool) {
+	ts := s.TimelineByRef[n.ref]
+	if ts != nil {
+		ids := ts.allEventIDs()
+		if len(ids) > 0 {
+			for _, id := range ids {
+				if id == "" {
+					continue
+				}
+				if !ts.readKnownByEventID[id] {
+					return false, false
+				}
+				if !ts.readByEventID[id] {
+					return true, false
+				}
+			}
+			return true, true
+		}
+	}
+
 	if s.ParentReadByRef[n.ref] {
 		return true, true
 	}
 	if s.ParentReadLoadedByRef[n.ref] {
 		return true, false
 	}
-	ts := s.TimelineByRef[n.ref]
 	if ts == nil {
 		return false, false
 	}
-	ids := ts.allEventIDs()
-	if len(ids) == 0 {
-		return ts.done, ts.done
-	}
-	for _, id := range ids {
-		if id == "" {
-			continue
-		}
-		if !ts.readKnownByEventID[id] {
-			return false, false
-		}
-		if !ts.readByEventID[id] {
-			return true, false
-		}
-	}
-	return true, true
+	return ts.done, ts.done
 }
 
 func (s *AppState) notificationUnreadMarker(n notifRow) string {

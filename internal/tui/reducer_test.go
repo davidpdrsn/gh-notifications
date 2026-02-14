@@ -2119,6 +2119,34 @@ func TestNotificationUnreadMarkerUsesLoadedParentUnreadWithoutTimeline(t *testin
 	}
 }
 
+func TestNotificationReadStateTimelineUnreadOverridesParentRead(t *testing.T) {
+	state := NewState()
+	n := notifRow{id: "n1", repo: "o/r", ref: "o/r#1", title: "t"}
+	state.Notifications = []notifRow{n}
+	state.rebuildNotifIndex()
+	state.ParentReadByRef[n.ref] = true
+	state.ParentReadLoadedByRef[n.ref] = true
+	state.TimelineByRef[n.ref] = &timelineState{
+		ref:                n.ref,
+		rowIndexByID:       map[string]int{},
+		threadByID:         map[string]*threadGroup{},
+		expandedThreads:    map[string]bool{},
+		readByEventID:      map[string]bool{"e1": false},
+		readKnownByEventID: map[string]bool{"e1": true},
+		readLoadInFlight:   map[string]bool{},
+	}
+	body := "body"
+	state.TimelineByRef[n.ref].insertTimelineEvent(ghpr.TimelineEvent{ID: "e1", Type: "github.timeline.commented", OccurredAt: time.Now().UTC(), Comment: &ghpr.CommentContext{Body: &body}})
+
+	known, read := state.notificationReadState(n)
+	if !known {
+		t.Fatalf("expected known read state")
+	}
+	if read {
+		t.Fatalf("expected timeline unread to override parent-read state")
+	}
+}
+
 func TestParentReadLoadedEventInvalidatesNotificationMarkerCache(t *testing.T) {
 	state := NewState()
 	n := notifRow{id: "n1", repo: "o/r", ref: "o/r#1", title: "t"}
@@ -2136,6 +2164,40 @@ func TestParentReadLoadedEventInvalidatesNotificationMarkerCache(t *testing.T) {
 
 	if got := state.notificationUnreadMarker(n); got != " ●  " {
 		t.Fatalf("expected marker cache to be invalidated after parent load, got %q", got)
+	}
+}
+
+func TestTimelineArrivedEventInvalidatesNotificationMarkerCache(t *testing.T) {
+	state := NewState()
+	state.CurrentRef = "o/r#1"
+	state.TimelineGen = 1
+	state.Notifications = []notifRow{{id: "n1", repo: "o/r", ref: "o/r#1", title: "t", updatedAt: time.Now().UTC()}}
+	state.rebuildNotifIndex()
+	state.notifMarkerByRef["o/r#1"] = "    "
+	state.TimelineByRef[state.CurrentRef] = &timelineState{
+		ref:                state.CurrentRef,
+		rowIndexByID:       map[string]int{},
+		threadByID:         map[string]*threadGroup{},
+		expandedThreads:    map[string]bool{},
+		readByEventID:      map[string]bool{},
+		readKnownByEventID: map[string]bool{},
+		readLoadInFlight:   map[string]bool{},
+	}
+	body := "body"
+
+	next, _ := Reduce(state, TimelineArrivedEvent{
+		Generation: 1,
+		Ref:        state.CurrentRef,
+		Event: ghpr.TimelineEvent{
+			ID:         "e1",
+			Type:       "github.timeline.commented",
+			OccurredAt: time.Now().UTC(),
+			Comment:    &ghpr.CommentContext{Body: &body},
+		},
+	})
+
+	if _, ok := next.notifMarkerByRef[state.CurrentRef]; ok {
+		t.Fatalf("expected timeline-arrived event to invalidate notification marker cache")
 	}
 }
 

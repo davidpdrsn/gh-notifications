@@ -474,6 +474,7 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 			if ts != nil {
 				ensureReadStateMaps(ts)
 				ts.insertTimelineEvent(e.Event)
+				invalidateNotifMarkerCacheForRef(&state, e.Ref)
 				if e.Event.ID != "" {
 					if state.ReadThroughRef == e.Ref {
 						ts.readByEventID[e.Event.ID] = true
@@ -554,6 +555,7 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 				ts.readKnownByEventID[id] = true
 				ts.readByEventID[id] = readSet[id]
 			}
+			invalidateNotifMarkerCacheForRef(&state, e.Ref)
 		}
 	case ReadStateLoadFailedEvent:
 		if ts := state.TimelineByRef[e.Ref]; ts != nil {
@@ -585,6 +587,7 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 				ts.readByEventID[id] = pending.prevRead[id]
 				ts.readKnownByEventID[id] = pending.prevKnown[id]
 			}
+			invalidateNotifMarkerCacheForRef(&state, pending.ref)
 		}
 		if pending.ref == state.CurrentRef {
 			state.Status = "failed to persist read state: " + e.Err
