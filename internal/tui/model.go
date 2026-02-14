@@ -113,7 +113,11 @@ func waitForAsyncMsg(ch <-chan tea.Msg) tea.Cmd {
 }
 
 func (m *model) debugStatus() string {
-	parts := []string{"q", "tab", "h/l", "j/k", "[ / ]", "r", "^r", "H", "o", "^p/^n", "^u/^d", "C"}
+	if m.state.ArchiveConfirmOpen {
+		parts := []string{"a confirm", "esc cancel"}
+		return stringsJoin(parts, "   ")
+	}
+	parts := []string{"q", "tab", "h/l", "j/k", "[ / ]", "r", "a", "^r", "H", "o", "^p/^n", "^u/^d", "C"}
 	return stringsJoin(parts, "   ")
 }
 

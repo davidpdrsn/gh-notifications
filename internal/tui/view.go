@@ -9,6 +9,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	xansi "github.com/charmbracelet/x/ansi"
 	"github.com/mattn/go-runewidth"
 )
 
@@ -61,7 +62,71 @@ func (m *model) View() string {
 		row = lipgloss.JoinHorizontal(lipgloss.Top, panes[0], sep, panes[1])
 	}
 	status := m.styles.status.Width(m.state.Width).Render(" " + m.bottomStatus())
-	return lipgloss.JoinVertical(lipgloss.Left, row, status)
+	base := lipgloss.JoinVertical(lipgloss.Left, row, status)
+	if m.state.ArchiveConfirmOpen {
+		return overlayModalCentered(base, m.renderArchiveConfirmModal(), m.state.Width, m.state.Height)
+	}
+	return base
+}
+
+func (m *model) renderArchiveConfirmModal() string {
+	title := m.styles.title.Render("Archive notification?")
+	body := m.styles.text.Render("Press a again to confirm.")
+	hint := m.styles.muted.Render("Press esc to cancel.")
+	content := lipgloss.JoinVertical(lipgloss.Left, title, "", body, hint)
+	box := lipgloss.NewStyle().
+		Border(lipgloss.NormalBorder()).
+		Padding(1, 2).
+		MaxWidth(max(24, m.state.Width-4)).
+		Render(content)
+	return box
+}
+
+func overlayModalCentered(base, modal string, width, height int) string {
+	if strings.TrimSpace(modal) == "" {
+		return base
+	}
+	baseLines := strings.Split(base, "\n")
+	if len(baseLines) < height {
+		for len(baseLines) < height {
+			baseLines = append(baseLines, "")
+		}
+	}
+	for i := range baseLines {
+		baseLines[i] = lipgloss.PlaceHorizontal(width, lipgloss.Left, baseLines[i])
+	}
+	modalLines := strings.Split(modal, "\n")
+	modalWidth := 0
+	for _, line := range modalLines {
+		if w := xansi.StringWidth(line); w > modalWidth {
+			modalWidth = w
+		}
+	}
+	if modalWidth > width {
+		modalWidth = width
+	}
+	x := (width - modalWidth) / 2
+	if x < 0 {
+		x = 0
+	}
+	y := (height - len(modalLines)) / 2
+	if y < 0 {
+		y = 0
+	}
+	for i, line := range modalLines {
+		row := y + i
+		if row < 0 || row >= len(baseLines) {
+			continue
+		}
+		left := xansi.Cut(baseLines[row], 0, x)
+		overlay := lipgloss.PlaceHorizontal(modalWidth, lipgloss.Left, line)
+		right := xansi.Cut(baseLines[row], x+modalWidth, width)
+		baseLines[row] = left + overlay + right
+	}
+	if len(baseLines) > height && height > 0 {
+		baseLines = baseLines[:height]
+	}
+	return strings.Join(baseLines, "\n")
 }
 
 func (m *model) stylePaneActivity(pane string, active bool) string {

@@ -130,6 +130,10 @@ func (c *Client) FetchForcePushInterdiff(ctx context.Context, ref string, eventI
 	}, nil
 }
 
+func (c *Client) ArchiveNotificationThread(ctx context.Context, threadID string) error {
+	return c.github.ArchiveNotificationThread(ctx, threadID)
+}
+
 func (c *Client) streamPRTimeline(ctx context.Context, owner, repo string, number int, emit func(timelineapi.Event) error, onWarning func(string)) error {
 	if err := c.github.StreamTimeline(ctx, owner, repo, number, func(item github.TimelineItem) error {
 		e, warning, ok := timeline.MapTimelineItem(item.Raw)

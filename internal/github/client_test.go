@@ -31,3 +31,21 @@ func TestStreamNotificationsRequestsAllNotifications(t *testing.T) {
 		t.Fatalf("expected no error, got %v", err)
 	}
 }
+
+func TestArchiveNotificationThreadUsesDeleteEndpoint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			t.Fatalf("expected DELETE method, got %q", r.Method)
+		}
+		if r.URL.Path != "/notifications/threads/42" {
+			t.Fatalf("expected thread path, got %q", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	client := NewClient("", server.URL)
+	if err := client.ArchiveNotificationThread(context.Background(), "42"); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+}

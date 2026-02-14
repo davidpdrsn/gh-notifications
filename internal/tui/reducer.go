@@ -77,6 +77,16 @@ type ParentReadStatePersistFailedEvent struct {
 	OpID int64
 	Err  string
 }
+
+type ArchiveNotificationSucceededEvent struct {
+	OpID int64
+}
+
+type ArchiveNotificationFailedEvent struct {
+	OpID int64
+	Err  string
+}
+
 type CommitDiffLoadedEvent struct {
 	Ref     string
 	EventID string
@@ -144,6 +154,8 @@ func (ParentReadStateLoadedEvent) isEvent()        {}
 func (ParentReadStateLoadFailedEvent) isEvent()    {}
 func (ParentReadStatePersistedEvent) isEvent()     {}
 func (ParentReadStatePersistFailedEvent) isEvent() {}
+func (ArchiveNotificationSucceededEvent) isEvent() {}
+func (ArchiveNotificationFailedEvent) isEvent()    {}
 func (CommitDiffLoadedEvent) isEvent()             {}
 func (CommitDiffErrEvent) isEvent()                {}
 func (ForcePushInterdiffLoadedEvent) isEvent() {
@@ -194,6 +206,12 @@ type PersistParentReadStateEffect struct {
 	Ref  string
 	Read bool
 }
+
+type ArchiveNotificationEffect struct {
+	OpID     int64
+	ThreadID string
+}
+
 type OpenURLEffect struct{ URL string }
 type ScheduleAutoRefreshTickEffect struct{}
 type ScheduleRefreshSpinnerTickEffect struct{}
@@ -209,6 +227,7 @@ func (LoadReadStateEffect) isEffect()          {}
 func (PersistReadStateEffect) isEffect()       {}
 func (LoadParentReadStateEffect) isEffect()    {}
 func (PersistParentReadStateEffect) isEffect() {}
+func (ArchiveNotificationEffect) isEffect()    {}
 func (OpenURLEffect) isEffect()                {}
 func (ScheduleAutoRefreshTickEffect) isEffect() {
 }
@@ -234,6 +253,20 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 	case MouseClickEvent:
 		return handleMouseClick(&state, &effects, e), effects
 	case KeyEvent:
+		if state.ArchiveConfirmOpen {
+			clearMotionCount(&state)
+			switch e.Key {
+			case "ctrl+c", "q":
+				state.Quit = true
+				effects = append(effects, CancelTimelineEffect{})
+			case "esc", "backspace":
+				closeArchiveConfirm(&state)
+				state.Status = "archive canceled"
+			case "a":
+				confirmArchiveNotification(&state, &effects)
+			}
+			break
+		}
 		if appendMotionCount(&state, e.Key) {
 			break
 		}
@@ -278,6 +311,9 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 		case "o":
 			clearMotionCount(&state)
 			openSelectedInBrowser(&state, &effects)
+		case "a":
+			clearMotionCount(&state)
+			openArchiveConfirm(&state)
 		case "down", "j":
 			moveDownN(&state, &effects, count)
 		case "up", "k":
@@ -527,6 +563,25 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 			delete(state.ParentReadByRef, pending.ref)
 		}
 		state.Status = "failed to persist parent read state: " + e.Err
+	case ArchiveNotificationSucceededEvent:
+		pending, ok := state.PendingArchive[e.OpID]
+		if !ok {
+			break
+		}
+		delete(state.PendingArchive, e.OpID)
+		removeNotificationByID(&state, &effects, pending.notifID)
+		closeArchiveConfirm(&state)
+		state.Focus = focusNotifications
+		state.Status = "archived notification"
+	case ArchiveNotificationFailedEvent:
+		pending, ok := state.PendingArchive[e.OpID]
+		if !ok {
+			break
+		}
+		delete(state.PendingArchive, e.OpID)
+		closeArchiveConfirm(&state)
+		state.Focus = pending.from
+		state.Status = "archive failed: " + e.Err
 	case CommitDiffLoadedEvent:
 		if ts := state.TimelineByRef[e.Ref]; ts != nil {
 			if ts.commitDiffByID == nil {
@@ -2396,6 +2451,10 @@ func markSelectedNotificationRead(state *AppState, effects *[]Effect) {
 	if n == nil {
 		return
 	}
+	markNotificationRead(state, effects, *n)
+}
+
+func markNotificationRead(state *AppState, effects *[]Effect, n notifRow) {
 	setParentReadOverride(state, effects, n.ref, true)
 	ts := state.TimelineByRef[n.ref]
 	if ts == nil {
@@ -2456,6 +2515,134 @@ func markSelectedNotificationRead(state *AppState, effects *[]Effect) {
 		Read:     true,
 	})
 	beginReadThrough(state, effects, n.ref, ts, true)
+}
+
+func openArchiveConfirm(state *AppState) {
+	target, ok := archiveTargetNotification(*state)
+	if !ok {
+		state.Status = "nothing to archive"
+		return
+	}
+	state.ArchiveConfirmOpen = true
+	state.ArchiveConfirmNotifID = target.id
+	state.ArchiveConfirmRef = target.ref
+	state.ArchiveConfirmThreadID = target.id
+	state.ArchiveConfirmFromFocus = state.Focus
+	state.Status = "press a again to confirm archive"
+}
+
+func closeArchiveConfirm(state *AppState) {
+	state.ArchiveConfirmOpen = false
+	state.ArchiveConfirmNotifID = ""
+	state.ArchiveConfirmRef = ""
+	state.ArchiveConfirmThreadID = ""
+	state.ArchiveConfirmFromFocus = focusNotifications
+}
+
+func confirmArchiveNotification(state *AppState, effects *[]Effect) {
+	if !state.ArchiveConfirmOpen {
+		return
+	}
+	n, ok := notificationByID(*state, state.ArchiveConfirmNotifID)
+	if !ok {
+		closeArchiveConfirm(state)
+		state.Status = "notification no longer available"
+		return
+	}
+	markNotificationRead(state, effects, n)
+
+	state.NextArchiveOpID++
+	opID := state.NextArchiveOpID
+	if state.PendingArchive == nil {
+		state.PendingArchive = make(map[int64]pendingArchiveOp)
+	}
+	state.PendingArchive[opID] = pendingArchiveOp{
+		notifID:  state.ArchiveConfirmNotifID,
+		ref:      state.ArchiveConfirmRef,
+		threadID: state.ArchiveConfirmThreadID,
+		from:     state.ArchiveConfirmFromFocus,
+	}
+	*effects = append(*effects, ArchiveNotificationEffect{OpID: opID, ThreadID: state.ArchiveConfirmThreadID})
+	closeArchiveConfirm(state)
+	state.Status = "archiving notification..."
+}
+
+func archiveTargetNotification(state AppState) (notifRow, bool) {
+	if state.Focus == focusNotifications {
+		n := state.selectedNotification()
+		if n == nil {
+			return notifRow{}, false
+		}
+		return *n, true
+	}
+	if state.CurrentRef == "" {
+		return notifRow{}, false
+	}
+	if n, ok := notificationByID(state, state.SelectedNotif); ok && n.ref == state.CurrentRef {
+		return n, true
+	}
+	for _, n := range state.Notifications {
+		if n.ref == state.CurrentRef {
+			return n, true
+		}
+	}
+	return notifRow{}, false
+}
+
+func notificationByID(state AppState, id string) (notifRow, bool) {
+	if strings.TrimSpace(id) == "" {
+		return notifRow{}, false
+	}
+	idx, ok := state.NotifIndexByID[id]
+	if !ok || idx < 0 || idx >= len(state.Notifications) {
+		return notifRow{}, false
+	}
+	return state.Notifications[idx], true
+}
+
+func removeNotificationByID(state *AppState, effects *[]Effect, id string) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return
+	}
+	visibleBefore := state.visibleNotifications()
+	anchor := indexOfNotificationByID(visibleBefore, id)
+
+	idx := -1
+	for i := range state.Notifications {
+		if state.Notifications[i].id == id {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return
+	}
+	archived := state.Notifications[idx]
+	state.Notifications = append(state.Notifications[:idx], state.Notifications[idx+1:]...)
+	state.rebuildNotifIndex()
+	if state.notifMarkerByRef != nil {
+		delete(state.notifMarkerByRef, archived.ref)
+	}
+
+	visibleAfter := state.visibleNotifications()
+	if len(visibleAfter) == 0 {
+		state.SelectedNotif = ""
+		state.NotifSelected = 0
+		if state.CurrentRef != "" {
+			state.CurrentRef = ""
+			*effects = append(*effects, CancelTimelineEffect{})
+		}
+		return
+	}
+	if anchor < 0 {
+		anchor = 0
+	}
+	if anchor >= len(visibleAfter) {
+		anchor = len(visibleAfter) - 1
+	}
+	state.NotifSelected = anchor
+	selectNotificationByID(state, effects, visibleAfter[anchor].id)
 }
 
 func selectedBrowserURL(state AppState) string {

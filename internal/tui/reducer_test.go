@@ -2397,3 +2397,88 @@ func TestFinishRefreshDoesNotSetRefreshedStatus(t *testing.T) {
 		t.Fatalf("expected no refreshed status text")
 	}
 }
+
+func TestArchiveKeyOpensConfirmFromNonNotificationPanes(t *testing.T) {
+	for _, focus := range []focusColumn{focusTimeline, focusThread, focusDetail} {
+		t.Run(fmt.Sprintf("focus=%d", focus), func(t *testing.T) {
+			state := NewState()
+			state.Focus = focus
+			state.Notifications = []notifRow{{id: "42", repo: "o/r", title: "title", ref: "o/r#1", updatedAt: time.Now().UTC()}}
+			state.rebuildNotifIndex()
+			state.SelectedNotif = "42"
+			state.NotifSelected = 0
+			state.CurrentRef = "o/r#1"
+
+			next, effects := Reduce(state, KeyEvent{Key: "a"})
+
+			if !next.ArchiveConfirmOpen {
+				t.Fatalf("expected archive confirm to open")
+			}
+			if next.ArchiveConfirmThreadID != "42" {
+				t.Fatalf("expected target thread id 42, got %q", next.ArchiveConfirmThreadID)
+			}
+			if len(effects) != 0 {
+				t.Fatalf("expected no side effects before confirmation, got %d", len(effects))
+			}
+		})
+	}
+}
+
+func TestArchiveConfirmMarksReadAndRemovesNotificationOnSuccess(t *testing.T) {
+	state := NewState()
+	state.Focus = focusTimeline
+	state.Notifications = []notifRow{{id: "42", repo: "o/r", title: "title", ref: "o/r#1", updatedAt: time.Now().UTC()}}
+	state.rebuildNotifIndex()
+	state.SelectedNotif = "42"
+	state.NotifSelected = 0
+	state.CurrentRef = "o/r#1"
+	state.TimelineByRef[state.CurrentRef] = &timelineState{
+		ref:                state.CurrentRef,
+		rowIndexByID:       map[string]int{},
+		threadByID:         map[string]*threadGroup{},
+		expandedThreads:    map[string]bool{},
+		readByEventID:      map[string]bool{"e1": false},
+		readKnownByEventID: map[string]bool{"e1": true},
+		readLoadInFlight:   map[string]bool{},
+	}
+	body := "body"
+	state.TimelineByRef[state.CurrentRef].insertTimelineEvent(ghpr.TimelineEvent{ID: "e1", Type: "github.timeline.commented", OccurredAt: time.Now().UTC(), Comment: &ghpr.CommentContext{Body: &body}})
+
+	next, _ := Reduce(state, KeyEvent{Key: "a"})
+	next, effects := Reduce(next, KeyEvent{Key: "a"})
+
+	if next.ArchiveConfirmOpen {
+		t.Fatalf("expected archive confirm to close after confirmation")
+	}
+	foundArchive := false
+	archiveOpID := int64(0)
+	foundPersistRead := false
+	for _, eff := range effects {
+		switch e := eff.(type) {
+		case ArchiveNotificationEffect:
+			foundArchive = true
+			archiveOpID = e.OpID
+			if e.ThreadID != "42" {
+				t.Fatalf("expected archive thread id 42, got %q", e.ThreadID)
+			}
+		case PersistReadStateEffect:
+			if e.Ref == "o/r#1" && e.Read {
+				foundPersistRead = true
+			}
+		}
+	}
+	if !foundArchive {
+		t.Fatalf("expected ArchiveNotificationEffect")
+	}
+	if !foundPersistRead {
+		t.Fatalf("expected PersistReadStateEffect")
+	}
+
+	next, _ = Reduce(next, ArchiveNotificationSucceededEvent{OpID: archiveOpID})
+	if len(next.Notifications) != 0 {
+		t.Fatalf("expected notification removed after archive success")
+	}
+	if next.Focus != focusNotifications {
+		t.Fatalf("expected focus to return to notifications, got %v", next.Focus)
+	}
+}

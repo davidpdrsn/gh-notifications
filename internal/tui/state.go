@@ -152,6 +152,8 @@ type AppState struct {
 	NextReadOpID                int64
 	PendingRead                 map[int64]pendingReadOp
 	PendingParentRead           map[int64]pendingParentReadOp
+	NextArchiveOpID             int64
+	PendingArchive              map[int64]pendingArchiveOp
 	ParentReadByRef             map[string]bool
 	ParentReadLoadedByRef       map[string]bool
 	ParentReadLoadInFlightByRef map[string]bool
@@ -159,6 +161,12 @@ type AppState struct {
 	ReadThroughIDs              map[string]bool
 	MotionCount                 string
 	notifMarkerByRef            map[string]string
+
+	ArchiveConfirmOpen      bool
+	ArchiveConfirmNotifID   string
+	ArchiveConfirmRef       string
+	ArchiveConfirmThreadID  string
+	ArchiveConfirmFromFocus focusColumn
 }
 
 type pendingReadOp struct {
@@ -176,6 +184,13 @@ type pendingParentReadOp struct {
 	prevRead   bool
 }
 
+type pendingArchiveOp struct {
+	notifID  string
+	ref      string
+	threadID string
+	from     focusColumn
+}
+
 func NewState() AppState {
 	return AppState{
 		Focus:                       focusNotifications,
@@ -189,6 +204,7 @@ func NewState() AppState {
 		RefreshTimelineAnchorByRef:  make(map[string]timelineRefreshAnchor),
 		PendingRead:                 make(map[int64]pendingReadOp),
 		PendingParentRead:           make(map[int64]pendingParentReadOp),
+		PendingArchive:              make(map[int64]pendingArchiveOp),
 		ParentReadByRef:             make(map[string]bool),
 		ParentReadLoadedByRef:       make(map[string]bool),
 		ParentReadLoadInFlightByRef: make(map[string]bool),

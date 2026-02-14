@@ -85,6 +85,15 @@ type parentReadStatePersistErrMsg struct {
 	err  error
 }
 
+type archiveNotificationSucceededMsg struct {
+	opID int64
+}
+
+type archiveNotificationErrMsg struct {
+	opID int64
+	err  error
+}
+
 type commitDiffLoadedMsg struct {
 	ref     string
 	eventID string
@@ -190,6 +199,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case parentReadStatePersistErrMsg:
 		asyncMsg = true
 		events = append(events, ParentReadStatePersistFailedEvent{OpID: t.opID, Err: t.err.Error()})
+	case archiveNotificationSucceededMsg:
+		asyncMsg = true
+		events = append(events, ArchiveNotificationSucceededEvent{OpID: t.opID})
+	case archiveNotificationErrMsg:
+		asyncMsg = true
+		events = append(events, ArchiveNotificationFailedEvent{OpID: t.opID, Err: t.err.Error()})
 	case commitDiffLoadedMsg:
 		asyncMsg = true
 		events = append(events, CommitDiffLoadedEvent{Ref: t.ref, EventID: t.eventID, Diff: t.diff})
@@ -279,6 +294,8 @@ func (m *model) applyEffects(effects []Effect) {
 			m.startParentReadStateLoader(e.Refs)
 		case PersistParentReadStateEffect:
 			m.startParentReadStatePersist(e.OpID, e.Ref, e.Read)
+		case ArchiveNotificationEffect:
+			m.startArchiveNotification(e.OpID, e.ThreadID)
 		case ScheduleAutoRefreshTickEffect:
 			m.scheduleAutoRefreshTick()
 		case ScheduleRefreshSpinnerTickEffect:
@@ -392,6 +409,20 @@ func (m *model) startParentReadStatePersist(opID int64, ref string, read bool) {
 			return
 		}
 		m.msgCh <- parentReadStatePersistedMsg{opID: opID}
+	}()
+}
+
+func (m *model) startArchiveNotification(opID int64, threadID string) {
+	go func() {
+		if m.client == nil {
+			m.msgCh <- archiveNotificationErrMsg{opID: opID, err: errors.New("client unavailable")}
+			return
+		}
+		if err := m.client.ArchiveNotificationThread(m.ctx, threadID); err != nil {
+			m.msgCh <- archiveNotificationErrMsg{opID: opID, err: err}
+			return
+		}
+		m.msgCh <- archiveNotificationSucceededMsg{opID: opID}
 	}()
 }
 

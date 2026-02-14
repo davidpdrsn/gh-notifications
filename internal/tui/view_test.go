@@ -149,6 +149,21 @@ func TestTeaProgramLoopChangesFocusedPaneWidth(t *testing.T) {
 	}
 }
 
+func TestViewShowsArchiveConfirmationModal(t *testing.T) {
+	m := newModel(context.Background(), nil, nil)
+	m.state.Width = 80
+	m.state.Height = 20
+	m.state.ArchiveConfirmOpen = true
+
+	out := m.View()
+	if !strings.Contains(out, "Archive notification?") {
+		t.Fatalf("expected archive confirmation modal title")
+	}
+	if !strings.Contains(out, "Press a again to confirm.") {
+		t.Fatalf("expected archive confirmation modal instructions")
+	}
+}
+
 func TestTeaProgramLoopMouseClickSelectsTimeline(t *testing.T) {
 	base := newModel(context.Background(), nil, nil)
 	base.state.Width = 96

@@ -275,6 +275,38 @@ func (c *Client) StreamNotifications(ctx context.Context, onItem func(Notificati
 	return nil
 }
 
+func (c *Client) ArchiveNotificationThread(ctx context.Context, threadID string) error {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return fmt.Errorf("thread id is empty")
+	}
+
+	path := fmt.Sprintf("/notifications/threads/%s", url.PathEscape(threadID))
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, c.baseURL+path, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create github request: %w", err)
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("github request failed: %w", err)
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+
+	if err := checkStatus(resp); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func (c *Client) getJSON(ctx context.Context, path string, out any) error {
 	req, err := c.newRequest(ctx, path)
 	if err != nil {
