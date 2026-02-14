@@ -739,14 +739,82 @@ func TestDetailScrollKeybindsWorkRegardlessOfFocus(t *testing.T) {
 		t.Fatalf("expected detail scroll to decrement, got %d", next.DetailScroll)
 	}
 
+	next.Focus = focusDetail
 	next, _ = Reduce(next, KeyEvent{Key: "ctrl+d"})
 	if next.DetailScroll != 11 {
-		t.Fatalf("expected detail scroll to jump by 10, got %d", next.DetailScroll)
+		t.Fatalf("expected detail scroll to jump by 10 in detail focus, got %d", next.DetailScroll)
 	}
 
 	next, _ = Reduce(next, KeyEvent{Key: "ctrl+u"})
 	if next.DetailScroll != 1 {
-		t.Fatalf("expected detail scroll to jump back by 10, got %d", next.DetailScroll)
+		t.Fatalf("expected detail scroll to jump back by 10 in detail focus, got %d", next.DetailScroll)
+	}
+}
+
+func TestCtrlDUScrollsFocusedNotificationsByTen(t *testing.T) {
+	state := NewState()
+	state.Focus = focusNotifications
+	state.Notifications = make([]notifRow, 0, 25)
+	for i := 0; i < 25; i++ {
+		state.Notifications = append(state.Notifications, notifRow{
+			id:        fmt.Sprintf("n%d", i+1),
+			repo:      "o/r",
+			ref:       fmt.Sprintf("o/r#%d", i+1),
+			updatedAt: time.Now().UTC().Add(-time.Duration(i) * time.Minute),
+		})
+	}
+	state.rebuildNotifIndex()
+	state.SelectedNotif = "n1"
+	state.NotifSelected = 0
+	state.CurrentRef = "o/r#1"
+
+	next, _ := Reduce(state, KeyEvent{Key: "ctrl+d"})
+	if next.NotifSelected != 10 {
+		t.Fatalf("expected ctrl+d to move notifications selection down 10, got %d", next.NotifSelected)
+	}
+	if next.SelectedNotif != "n11" {
+		t.Fatalf("expected selected notification n11, got %q", next.SelectedNotif)
+	}
+
+	next, _ = Reduce(next, KeyEvent{Key: "ctrl+u"})
+	if next.NotifSelected != 0 {
+		t.Fatalf("expected ctrl+u to move notifications selection up 10, got %d", next.NotifSelected)
+	}
+	if next.SelectedNotif != "n1" {
+		t.Fatalf("expected selected notification n1, got %q", next.SelectedNotif)
+	}
+}
+
+func TestCtrlDUScrollsFocusedTimelineByTen(t *testing.T) {
+	state := NewState()
+	state.Focus = focusTimeline
+	state.CurrentRef = "o/r#1"
+	state.TimelineByRef[state.CurrentRef] = &timelineState{
+		ref:             state.CurrentRef,
+		rowIndexByID:    map[string]int{},
+		threadByID:      map[string]*threadGroup{},
+		expandedThreads: map[string]bool{},
+	}
+	ts := state.TimelineByRef[state.CurrentRef]
+	body := "body"
+	for i := 0; i < 25; i++ {
+		id := fmt.Sprintf("e%d", i+1)
+		ts.insertTimelineEvent(ghpr.TimelineEvent{ID: id, Type: "github.timeline.commented", OccurredAt: time.Now().UTC().Add(time.Duration(i) * time.Minute), Comment: &ghpr.CommentContext{Body: &body}})
+	}
+	ts.selectedID = eventRowID("e1")
+
+	next, _ := Reduce(state, KeyEvent{Key: "ctrl+d"})
+	rows := next.TimelineByRef[next.CurrentRef].rowsReadyForDisplay(next.TimelineByRef[next.CurrentRef].displayRows(next.HideRead))
+	idx := indexOfTimelineSelection(rows, next.TimelineByRef[next.CurrentRef].selectedID)
+	if idx != 10 {
+		t.Fatalf("expected ctrl+d to move timeline selection down 10, got %d", idx)
+	}
+
+	next, _ = Reduce(next, KeyEvent{Key: "ctrl+u"})
+	rows = next.TimelineByRef[next.CurrentRef].rowsReadyForDisplay(next.TimelineByRef[next.CurrentRef].displayRows(next.HideRead))
+	idx = indexOfTimelineSelection(rows, next.TimelineByRef[next.CurrentRef].selectedID)
+	if idx != 0 {
+		t.Fatalf("expected ctrl+u to move timeline selection up 10, got %d", idx)
 	}
 }
 

@@ -236,13 +236,10 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 			}
 		case "ctrl+d":
 			clearMotionCount(&state)
-			state.DetailScroll += 10
+			scrollFocusedPaneDown(&state, &effects, 10)
 		case "ctrl+u":
 			clearMotionCount(&state)
-			state.DetailScroll -= 10
-			if state.DetailScroll < 0 {
-				state.DetailScroll = 0
-			}
+			scrollFocusedPaneUp(&state, &effects, 10)
 		case "C", "shift+c":
 			clearMotionCount(&state)
 			column, text := columnCopyText(state)
@@ -860,6 +857,31 @@ func moveUpN(state *AppState, effects *[]Effect, n int) {
 	for i := 0; i < n; i++ {
 		moveUp(state, effects)
 	}
+}
+
+func scrollFocusedPaneDown(state *AppState, effects *[]Effect, n int) {
+	if n < 1 {
+		n = 1
+	}
+	if state.Focus == focusDetail {
+		state.DetailScroll += n
+		return
+	}
+	moveDownN(state, effects, n)
+}
+
+func scrollFocusedPaneUp(state *AppState, effects *[]Effect, n int) {
+	if n < 1 {
+		n = 1
+	}
+	if state.Focus == focusDetail {
+		state.DetailScroll -= n
+		if state.DetailScroll < 0 {
+			state.DetailScroll = 0
+		}
+		return
+	}
+	moveUpN(state, effects, n)
 }
 
 func jumpToTopOfFocusedPane(state *AppState, effects *[]Effect) {
