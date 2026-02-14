@@ -444,11 +444,12 @@ func timelineSelectionVisibleWithWrap(state AppState) bool {
 		avail = 1
 	}
 	kindWidth := timelineKindColumnWidth(rows)
+	timeWidth := timelineTimeColumnWidth(rows)
 	actorWidth := timelineActorColumnWidth(rows)
 
 	used := 0
 	for i := ts.scrollOffset; i < len(rows); i++ {
-		h := len(wrapTimelineRow(rows[i], ts, avail, kindWidth, actorWidth))
+		h := len(wrapTimelineRow(rows[i], ts, avail, timeWidth, kindWidth, actorWidth))
 		if h < 1 {
 			h = 1
 		}
@@ -528,7 +529,7 @@ func TestThreadHeaderUsesCompactedPath(t *testing.T) {
 	if len(display) == 0 {
 		t.Fatal("expected at least one display row")
 	}
-	lines := wrapTimelineRow(display[0], ts, 120, 12, 12)
+	lines := wrapTimelineRow(display[0], ts, 120, 3, 12, 12)
 	joined := strings.Join(lines, "\n")
 	if !strings.Contains(joined, "RoomByRoom/../RoomOverview/RoomOverviewView.swift") {
 		t.Fatalf("expected compacted thread path in rendered row, got %q", joined)

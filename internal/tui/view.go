@@ -317,20 +317,22 @@ func (m *model) renderTimeline(width, height int) string {
 		}
 		plan := buildTimelineViewportPlan(ts, width, max(1, height-2), m.state.HideRead)
 		selectedRow = plan.selected
+		timeWidth := timelineTimeColumnWidth(rows)
 		kindWidth := timelineKindColumnWidth(rows)
+		leadWidth := timeWidth + 2 + kindWidth
 		for _, row := range plan.rows {
 			isRead := ts.rowRead(rows[row.index])
 			if highlightSelection && row.selected {
 				wrapped := row.lines
 				style := m.styleForTimelineRow(ts, rows[row.index])
 				for _, seg := range wrapped {
-					lines = append(lines, m.renderTimelineStyledLine(style, seg, plan.avail, true, kindWidth, isRead))
+					lines = append(lines, m.renderTimelineStyledLine(style, seg, plan.avail, true, leadWidth, isRead))
 					rowIndexByLine = append(rowIndexByLine, row.index)
 				}
 			} else {
 				style := m.styleForTimelineRow(ts, rows[row.index])
 				for _, seg := range row.lines {
-					lines = append(lines, m.renderTimelineStyledLine(style, seg, plan.avail, false, kindWidth, isRead))
+					lines = append(lines, m.renderTimelineStyledLine(style, seg, plan.avail, false, leadWidth, isRead))
 					rowIndexByLine = append(rowIndexByLine, row.index)
 				}
 			}
@@ -921,6 +923,20 @@ func timelineKindColumnWidth(rows []displayTimelineRow) int {
 	return width
 }
 
+func timelineTimeColumnWidth(rows []displayTimelineRow) int {
+	width := 3
+	for _, row := range rows {
+		if row.event == nil {
+			continue
+		}
+		w := lipgloss.Width(timeAgo(row.event.OccurredAt))
+		if w > width {
+			width = w
+		}
+	}
+	return width
+}
+
 func timelineActorColumnWidth(rows []displayTimelineRow) int {
 	width := 0
 	for _, row := range rows {
@@ -939,8 +955,8 @@ func timelineActorColumnWidth(rows []displayTimelineRow) int {
 	return width
 }
 
-func wrapTimelineRow(row displayTimelineRow, ts *timelineState, maxWidth int, kindWidth int, actorWidth int) []string {
-	prefix, content, messageOffset := timelineRowPrefixAndContent(row, ts, kindWidth, actorWidth)
+func wrapTimelineRow(row displayTimelineRow, ts *timelineState, maxWidth int, timeWidth int, kindWidth int, actorWidth int) []string {
+	prefix, content, messageOffset := timelineRowPrefixAndContent(row, ts, timeWidth, kindWidth, actorWidth)
 	indent := ""
 	if messageOffset > 0 {
 		indent = timelineContinuationIndent(row, prefix, messageOffset)
@@ -963,12 +979,13 @@ func timelineContinuationIndent(row displayTimelineRow, prefix string, messageOf
 	return strings.Repeat(" ", lipgloss.Width(prefix)+messageOffset)
 }
 
-func timelineRowPrefixAndContent(row displayTimelineRow, ts *timelineState, kindWidth int, actorWidth int) (string, string, int) {
+func timelineRowPrefixAndContent(row displayTimelineRow, ts *timelineState, timeWidth int, kindWidth int, actorWidth int) (string, string, int) {
 	marker := " ●  "
 	if ts != nil {
 		marker = ts.rowUnreadMarker(row)
 	}
 	if row.event != nil {
+		when := timeAgo(row.event.OccurredAt)
 		kind := eventKindLabel(*row.event)
 		actor := eventActorLabel(*row.event)
 		message := truncatePreview(eventPreviewText(*row.event), 96)
@@ -982,7 +999,7 @@ func timelineRowPrefixAndContent(row displayTimelineRow, ts *timelineState, kind
 				message = fmt.Sprintf("%s  %s", path, message)
 			}
 		}
-		content, messageOffset := formatTimelineColumns(kindWidth, actorWidth, kind, actor, message)
+		content, messageOffset := formatTimelineColumns(timeWidth, kindWidth, actorWidth, when, kind, actor, message)
 		return marker, content, messageOffset
 	}
 
@@ -993,7 +1010,11 @@ func timelineRowPrefixAndContent(row displayTimelineRow, ts *timelineState, kind
 	return marker, label, 0
 }
 
-func formatTimelineColumns(kindWidth int, actorWidth int, kind, actor, message string) (string, int) {
+func formatTimelineColumns(timeWidth int, kindWidth int, actorWidth int, when, kind, actor, message string) (string, int) {
+	if timeWidth < 1 {
+		timeWidth = 1
+	}
+	timeCol := padToDisplayWidth(when, timeWidth)
 	if kindWidth < 1 {
 		kindWidth = 1
 	}
@@ -1005,15 +1026,15 @@ func formatTimelineColumns(kindWidth int, actorWidth int, kind, actor, message s
 	if actorWidth > 0 {
 		actorCol := padToDisplayWidth(clampDisplayWidth(actor, actorWidth), actorWidth)
 		if message == "" {
-			return kindCol + "  " + actorCol, kindWidth + 2 + actorWidth + 2
+			return timeCol + "  " + kindCol + "  " + actorCol, timeWidth + 2 + kindWidth + 2 + actorWidth + 2
 		}
-		return kindCol + "  " + actorCol + "  " + message, kindWidth + 2 + actorWidth + 2
+		return timeCol + "  " + kindCol + "  " + actorCol + "  " + message, timeWidth + 2 + kindWidth + 2 + actorWidth + 2
 	}
 
 	if message == "" {
-		return kindCol, kindWidth + 2
+		return timeCol + "  " + kindCol, timeWidth + 2 + kindWidth + 2
 	}
-	return kindCol + "  " + message, kindWidth + 2
+	return timeCol + "  " + kindCol + "  " + message, timeWidth + 2 + kindWidth + 2
 }
 
 func formatThreadChildColumns(actorWidth int, actor, message string) (string, int) {

@@ -572,7 +572,7 @@ func TestWrapTimelineRowThreadHeaderHasNoArrowIndent(t *testing.T) {
 		label:          "RoomByRoom/../RoomOverview/RoomViewModel.swift (1 comments)",
 	}
 
-	lines := wrapTimelineRow(row, ts, 26, 9, 10)
+	lines := wrapTimelineRow(row, ts, 26, 3, 9, 10)
 	if len(lines) < 2 {
 		t.Fatalf("expected wrapped header lines, got %v", lines)
 	}
@@ -703,7 +703,7 @@ func TestThreadHeaderUsesPartialMarkerWhenMixedReadState(t *testing.T) {
 	if len(rows) != 1 {
 		t.Fatalf("expected one thread header row, got %d", len(rows))
 	}
-	marker, _, _ := timelineRowPrefixAndContent(rows[0], ts, 12, 10)
+	marker, _, _ := timelineRowPrefixAndContent(rows[0], ts, 3, 12, 10)
 	if marker != " ◐  " {
 		t.Fatalf("expected partial marker, got %q", marker)
 	}
@@ -749,20 +749,20 @@ func ptrBody(s string) *string {
 }
 
 func TestFormatTimelineColumnsAlignsKindColumn(t *testing.T) {
-	a, _ := formatTimelineColumns(10, 10, "opened", "KaffeDiem", "Auto detect")
-	b, _ := formatTimelineColumns(10, 10, "requested", "KaffeDiem", "")
+	a, _ := formatTimelineColumns(3, 10, 10, "1h", "opened", "KaffeDiem", "Auto detect")
+	b, _ := formatTimelineColumns(3, 10, 10, "1h", "requested", "KaffeDiem", "")
 
-	if !strings.HasPrefix(a, "opened    ") {
+	if !strings.Contains(a, "opened    ") {
 		t.Fatalf("expected padded kind column, got %q", a)
 	}
-	if !strings.HasPrefix(b, "requested ") {
+	if !strings.Contains(b, "requested ") {
 		t.Fatalf("expected padded kind column, got %q", b)
 	}
 }
 
 func TestFormatTimelineColumnsDoesNotTruncateKind(t *testing.T) {
-	line, _ := formatTimelineColumns(14, 0, "review_comment", "", "")
-	if !strings.HasPrefix(line, "review_comment") {
+	line, _ := formatTimelineColumns(3, 14, 0, "1h", "review_comment", "", "")
+	if !strings.Contains(line, "review_comment") {
 		t.Fatalf("expected full kind label, got %q", line)
 	}
 	if strings.Contains(line, "...") {
@@ -798,11 +798,11 @@ func TestEventKindLabelUsesFullTypeName(t *testing.T) {
 }
 
 func TestFormatTimelineColumnsAlignsMessageColumn(t *testing.T) {
-	first, offset := formatTimelineColumns(8, 10, "opened", "davidpdrsn", "NG-2918 long message")
+	first, offset := formatTimelineColumns(3, 8, 10, "1h", "opened", "davidpdrsn", "NG-2918 long message")
 	if offset <= 0 {
 		t.Fatalf("expected positive message offset, got %d", offset)
 	}
-	if !strings.HasPrefix(first, "opened  ") {
+	if !strings.Contains(first, "opened  ") {
 		t.Fatalf("expected kind column prefix, got %q", first)
 	}
 
@@ -876,6 +876,27 @@ func TestRenderTimelineKeepsSelectedRowVisibleWithStaleScrollOffset(t *testing.T
 	out := m.renderTimeline(midW, paneInnerHeight(m.state))
 	if !strings.Contains(out, "committed") {
 		t.Fatalf("expected selected committed row to remain visible, got %q", out)
+	}
+}
+
+func TestRenderTimelineShowsEventTimestamps(t *testing.T) {
+	m := newModel(context.Background(), nil, nil)
+	m.state.Width = 100
+	m.state.Height = 14
+	m.state.Focus = focusTimeline
+	m.state.CurrentRef = "owner/repo#1"
+	ts := &timelineState{ref: m.state.CurrentRef, rowIndexByID: map[string]int{}, threadByID: map[string]*threadGroup{}, expandedThreads: map[string]bool{}}
+	m.state.TimelineByRef[m.state.CurrentRef] = ts
+
+	body := "with timestamp"
+	ts.insertTimelineEvent(ghpr.TimelineEvent{ID: "e1", Type: "github.timeline.commented", OccurredAt: time.Now().UTC().Add(-(2*time.Hour + 3*time.Minute)), Comment: &ghpr.CommentContext{Body: &body}})
+
+	mode := m.state.currentPaneMode()
+	_, midW, _ := paneWidths(panesTotalWidth(m.state.Width, m.state.Focus, mode), m.state.Focus, mode)
+	out := m.renderTimeline(midW, paneInnerHeight(m.state))
+
+	if !strings.Contains(out, "2h") {
+		t.Fatalf("expected timeline row to include relative timestamp, got %q", out)
 	}
 }
 

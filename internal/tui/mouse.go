@@ -257,6 +257,7 @@ func timelineRowAtY(state AppState, y, width int) int {
 		avail = 1
 	}
 	kindWidth := timelineKindColumnWidth(rows)
+	timeWidth := timelineTimeColumnWidth(rows)
 	actorWidth := timelineActorColumnWidth(rows)
 	line := y
 
@@ -282,7 +283,7 @@ func timelineRowAtY(state AppState, y, width int) int {
 	}
 
 	for i := start; i < len(rows); i++ {
-		h := len(wrapTimelineRow(rows[i], ts, avail, kindWidth, actorWidth))
+		h := len(wrapTimelineRow(rows[i], ts, avail, timeWidth, kindWidth, actorWidth))
 		if h < 1 {
 			h = 1
 		}

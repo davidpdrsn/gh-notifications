@@ -46,12 +46,13 @@ func buildTimelineViewportPlan(ts *timelineState, width int, viewport int, hideR
 	}
 
 	kindWidth := timelineKindColumnWidth(rows)
+	timeWidth := timelineTimeColumnWidth(rows)
 	actorWidth := timelineActorColumnWidth(rows)
 	lineCount := func(i int) int {
 		if i < 0 || i >= len(rows) {
 			return 1
 		}
-		return len(wrapTimelineRow(rows[i], ts, plan.avail, kindWidth, actorWidth))
+		return len(wrapTimelineRow(rows[i], ts, plan.avail, timeWidth, kindWidth, actorWidth))
 	}
 	start = clampTimelineScrollToVisibleSelected(start, selected, len(rows), viewport, lineCount)
 	layoutRows := make([]timelineLayoutRow, 0, len(rows)-start)
@@ -59,7 +60,7 @@ func buildTimelineViewportPlan(ts *timelineState, width int, viewport int, hideR
 		layoutRows = append(layoutRows, timelineLayoutRow{
 			index:    i,
 			selected: i == selected,
-			lines:    wrapTimelineRow(rows[i], ts, plan.avail, kindWidth, actorWidth),
+			lines:    wrapTimelineRow(rows[i], ts, plan.avail, timeWidth, kindWidth, actorWidth),
 		})
 	}
 	plan.start = start
