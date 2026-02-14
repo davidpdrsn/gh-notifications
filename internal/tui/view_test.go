@@ -572,7 +572,7 @@ func TestWrapTimelineRowThreadHeaderHasNoArrowIndent(t *testing.T) {
 		label:          "RoomByRoom/../RoomOverview/RoomViewModel.swift (1 comments)",
 	}
 
-	lines := wrapTimelineRow(row, ts, 26, 3, 9, 10)
+	lines := wrapTimelineRow(row, ts, 26, 3, 9, 10, true)
 	if len(lines) < 2 {
 		t.Fatalf("expected wrapped header lines, got %v", lines)
 	}
@@ -703,7 +703,7 @@ func TestThreadHeaderUsesPartialMarkerWhenMixedReadState(t *testing.T) {
 	if len(rows) != 1 {
 		t.Fatalf("expected one thread header row, got %d", len(rows))
 	}
-	marker, _, _ := timelineRowPrefixAndContent(rows[0], ts, 3, 12, 10)
+	marker, _, _ := timelineRowPrefixAndContent(rows[0], ts, 3, 12, 10, true)
 	if marker != " ◐  " {
 		t.Fatalf("expected partial marker, got %q", marker)
 	}
@@ -785,8 +785,8 @@ func TestTimelineKindColumnWidthUsesLongestKind(t *testing.T) {
 		{event: &ghpr.TimelineEvent{Type: "github.timeline.committed"}},
 		{event: &ghpr.TimelineEvent{Type: "github.timeline.head_ref_force_pushed"}},
 	}
-	if got := timelineKindColumnWidth(rows); got != len("head_ref_force_pushed") {
-		t.Fatalf("expected width %d, got %d", len("head_ref_force_pushed"), got)
+	if got := timelineKindColumnWidth(rows); got != len("force_pushed") {
+		t.Fatalf("expected width %d, got %d", len("force_pushed"), got)
 	}
 }
 
@@ -889,7 +889,7 @@ func TestRenderTimelineShowsEventTimestamps(t *testing.T) {
 	m.state.TimelineByRef[m.state.CurrentRef] = ts
 
 	body := "with timestamp"
-	ts.insertTimelineEvent(ghpr.TimelineEvent{ID: "e1", Type: "github.timeline.commented", OccurredAt: time.Now().UTC().Add(-(2*time.Hour + 3*time.Minute)), Comment: &ghpr.CommentContext{Body: &body}})
+	ts.insertTimelineEvent(ghpr.TimelineEvent{ID: "e1", Type: "github.timeline.commented", OccurredAt: time.Now().UTC().Add(-(2*time.Hour + 3*time.Minute)), Actor: &ghpr.Actor{Login: "alice"}, Comment: &ghpr.CommentContext{Body: &body}})
 
 	mode := m.state.currentPaneMode()
 	_, midW, _ := paneWidths(panesTotalWidth(m.state.Width, m.state.Focus, mode), m.state.Focus, mode)
@@ -897,6 +897,41 @@ func TestRenderTimelineShowsEventTimestamps(t *testing.T) {
 
 	if !strings.Contains(out, "2h") {
 		t.Fatalf("expected timeline row to include relative timestamp, got %q", out)
+	}
+}
+
+func TestRenderTimelineHidesEventContentWhenNotFocused(t *testing.T) {
+	m := newModel(context.Background(), nil, nil)
+	m.state.Width = 100
+	m.state.Height = 14
+	m.state.Focus = focusNotifications
+	m.state.CurrentRef = "owner/repo#1"
+	ts := &timelineState{ref: m.state.CurrentRef, rowIndexByID: map[string]int{}, threadByID: map[string]*threadGroup{}, expandedThreads: map[string]bool{}}
+	m.state.TimelineByRef[m.state.CurrentRef] = ts
+
+	body := "UNIQUE_TIMELINE_BODY_CONTENT"
+	ts.insertTimelineEvent(ghpr.TimelineEvent{ID: "e1", Type: "github.timeline.commented", OccurredAt: time.Now().UTC().Add(-2 * time.Hour), Actor: &ghpr.Actor{Login: "alice"}, Comment: &ghpr.CommentContext{Body: &body}})
+
+	mode := m.state.currentPaneMode()
+	_, midW, _ := paneWidths(panesTotalWidth(m.state.Width, m.state.Focus, mode), m.state.Focus, mode)
+	out := m.renderTimeline(midW, paneInnerHeight(m.state))
+
+	if strings.Contains(out, "UNIQUE_TIMELINE_BODY_CONTENT") {
+		t.Fatalf("expected timeline body hidden when timeline pane not focused, got %q", out)
+	}
+	if !strings.Contains(out, "commented") {
+		t.Fatalf("expected timeline kind still visible when unfocused, got %q", out)
+	}
+	if !strings.Contains(out, "alice") {
+		t.Fatalf("expected timeline actor still visible when unfocused, got %q", out)
+	}
+
+	m.state.Focus = focusTimeline
+	mode = m.state.currentPaneMode()
+	_, midW, _ = paneWidths(panesTotalWidth(m.state.Width, m.state.Focus, mode), m.state.Focus, mode)
+	out = m.renderTimeline(midW, paneInnerHeight(m.state))
+	if !strings.Contains(out, "UNIQUE_TIMELINE_BODY_CONTENT") {
+		t.Fatalf("expected timeline body visible when focused, got %q", out)
 	}
 }
 

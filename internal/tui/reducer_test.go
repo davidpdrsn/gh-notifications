@@ -449,7 +449,7 @@ func timelineSelectionVisibleWithWrap(state AppState) bool {
 
 	used := 0
 	for i := ts.scrollOffset; i < len(rows); i++ {
-		h := len(wrapTimelineRow(rows[i], ts, avail, timeWidth, kindWidth, actorWidth))
+		h := len(wrapTimelineRow(rows[i], ts, avail, timeWidth, kindWidth, actorWidth, true))
 		if h < 1 {
 			h = 1
 		}
@@ -529,7 +529,7 @@ func TestThreadHeaderUsesCompactedPath(t *testing.T) {
 	if len(display) == 0 {
 		t.Fatal("expected at least one display row")
 	}
-	lines := wrapTimelineRow(display[0], ts, 120, 3, 12, 12)
+	lines := wrapTimelineRow(display[0], ts, 120, 3, 12, 12, true)
 	joined := strings.Join(lines, "\n")
 	if !strings.Contains(joined, "RoomByRoom/../RoomOverview/RoomOverviewView.swift") {
 		t.Fatalf("expected compacted thread path in rendered row, got %q", joined)
@@ -753,6 +753,8 @@ func TestDetailScrollKeybindsWorkRegardlessOfFocus(t *testing.T) {
 
 func TestCtrlDUScrollsFocusedNotificationsByTen(t *testing.T) {
 	state := NewState()
+	state.Width = 160
+	state.Height = 24
 	state.Focus = focusNotifications
 	state.Notifications = make([]notifRow, 0, 25)
 	for i := 0; i < 25; i++ {
@@ -787,6 +789,8 @@ func TestCtrlDUScrollsFocusedNotificationsByTen(t *testing.T) {
 
 func TestCtrlDUScrollsFocusedTimelineByTen(t *testing.T) {
 	state := NewState()
+	state.Width = 160
+	state.Height = 24
 	state.Focus = focusTimeline
 	state.CurrentRef = "o/r#1"
 	state.TimelineByRef[state.CurrentRef] = &timelineState{

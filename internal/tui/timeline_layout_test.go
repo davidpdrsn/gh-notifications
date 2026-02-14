@@ -32,7 +32,7 @@ func TestBuildTimelineViewportPlanNormalizesStaleOffset(t *testing.T) {
 
 	mode := state.currentPaneMode()
 	_, midW, _ := paneWidths(panesTotalWidth(state.Width, state.Focus, mode), state.Focus, mode)
-	plan := buildTimelineViewportPlan(ts, midW, timelineViewportRows(state), false)
+	plan := buildTimelineViewportPlan(ts, midW, timelineViewportRows(state), false, true)
 	if plan.start >= 2 {
 		t.Fatalf("expected stale start to normalize, got %d", plan.start)
 	}
@@ -82,7 +82,7 @@ func TestBuildTimelineViewportPlanKeepsWrappedSelectedVisible(t *testing.T) {
 
 	mode := state.currentPaneMode()
 	_, midW, _ := paneWidths(panesTotalWidth(state.Width, state.Focus, mode), state.Focus, mode)
-	plan := buildTimelineViewportPlan(ts, midW, timelineViewportRows(state), false)
+	plan := buildTimelineViewportPlan(ts, midW, timelineViewportRows(state), false, true)
 	if plan.start == 0 {
 		t.Fatalf("expected start to advance for wrapped rows")
 	}

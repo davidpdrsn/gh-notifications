@@ -850,11 +850,18 @@ func compactEventSummary(ev ghpr.TimelineEvent) string {
 func eventKindLabel(ev ghpr.TimelineEvent) string {
 	if ev.Event != nil {
 		if e := oneLine(*ev.Event); e != "" {
+			if e == "head_ref_force_pushed" {
+				return "force_pushed"
+			}
 			return e
 		}
 	}
 	if idx := strings.LastIndex(ev.Type, "."); idx >= 0 && idx < len(ev.Type)-1 {
-		return ev.Type[idx+1:]
+		label := ev.Type[idx+1:]
+		if label == "head_ref_force_pushed" {
+			return "force_pushed"
+		}
+		return label
 	}
 	return ev.Type
 }

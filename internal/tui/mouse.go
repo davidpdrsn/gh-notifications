@@ -283,7 +283,7 @@ func timelineRowAtY(state AppState, y, width int) int {
 	}
 
 	for i := start; i < len(rows); i++ {
-		h := len(wrapTimelineRow(rows[i], ts, avail, timeWidth, kindWidth, actorWidth))
+		h := len(wrapTimelineRow(rows[i], ts, avail, timeWidth, kindWidth, actorWidth, state.Focus == focusTimeline))
 		if h < 1 {
 			h = 1
 		}

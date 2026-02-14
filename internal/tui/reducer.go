@@ -978,7 +978,7 @@ func scrollTimelineByWrappedLines(state *AppState, delta int) {
 		if i < 0 || i >= len(rows) {
 			return 1
 		}
-		h := len(wrapTimelineRow(rows[i], ts, avail, timeWidth, kindWidth, actorWidth))
+		h := len(wrapTimelineRow(rows[i], ts, avail, timeWidth, kindWidth, actorWidth, true))
 		if h < 1 {
 			return 1
 		}
@@ -1492,6 +1492,9 @@ func normalizeTimeline(state *AppState, ts *timelineState) {
 	if ts.scrollOffset > maxScroll {
 		ts.scrollOffset = maxScroll
 	}
+	if state.Focus != focusTimeline {
+		ensureTimelineSelectionVisible(state, ts)
+	}
 }
 
 func ensureTimelineSelectionVisible(state *AppState, ts *timelineState) {
@@ -1508,7 +1511,7 @@ func ensureTimelineSelectionVisible(state *AppState, ts *timelineState) {
 	viewport := timelineViewportRows(*state)
 	mode := state.currentPaneMode()
 	_, midW, _ := paneWidths(panesTotalWidth(state.Width, state.Focus, mode), state.Focus, mode)
-	plan := buildTimelineViewportPlan(ts, midW, viewport, state.HideRead)
+	plan := buildTimelineViewportPlan(ts, midW, viewport, state.HideRead, state.Focus == focusTimeline)
 	ts.scrollOffset = plan.start
 }
 

@@ -13,7 +13,7 @@ type timelineViewportPlan struct {
 	rows     []timelineLayoutRow
 }
 
-func buildTimelineViewportPlan(ts *timelineState, width int, viewport int, hideRead bool) timelineViewportPlan {
+func buildTimelineViewportPlan(ts *timelineState, width int, viewport int, hideRead bool, showContent bool) timelineViewportPlan {
 	plan := timelineViewportPlan{
 		start:    0,
 		selected: 0,
@@ -52,7 +52,7 @@ func buildTimelineViewportPlan(ts *timelineState, width int, viewport int, hideR
 		if i < 0 || i >= len(rows) {
 			return 1
 		}
-		return len(wrapTimelineRow(rows[i], ts, plan.avail, timeWidth, kindWidth, actorWidth))
+		return len(wrapTimelineRow(rows[i], ts, plan.avail, timeWidth, kindWidth, actorWidth, showContent))
 	}
 	start = clampTimelineScrollToVisibleSelected(start, selected, len(rows), viewport, lineCount)
 	layoutRows := make([]timelineLayoutRow, 0, len(rows)-start)
@@ -60,7 +60,7 @@ func buildTimelineViewportPlan(ts *timelineState, width int, viewport int, hideR
 		layoutRows = append(layoutRows, timelineLayoutRow{
 			index:    i,
 			selected: i == selected,
-			lines:    wrapTimelineRow(rows[i], ts, plan.avail, timeWidth, kindWidth, actorWidth),
+			lines:    wrapTimelineRow(rows[i], ts, plan.avail, timeWidth, kindWidth, actorWidth, showContent),
 		})
 	}
 	plan.start = start

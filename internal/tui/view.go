@@ -315,7 +315,8 @@ func (m *model) renderTimeline(width, height int) string {
 				rowIndexByLine = append(rowIndexByLine, -1)
 			}
 		}
-		plan := buildTimelineViewportPlan(ts, width, max(1, height-2), m.state.HideRead)
+		showContent := m.state.Focus == focusTimeline
+		plan := buildTimelineViewportPlan(ts, width, max(1, height-2), m.state.HideRead, showContent)
 		selectedRow = plan.selected
 		timeWidth := timelineTimeColumnWidth(rows)
 		kindWidth := timelineKindColumnWidth(rows)
@@ -455,7 +456,7 @@ func (m *model) styleForTimelineRow(ts *timelineState, row displayTimelineRow) l
 		return m.styles.eventWarning
 	case "committed":
 		return m.styles.eventInfo
-	case "head_ref_force_pushed":
+	case "force_pushed":
 		return m.styles.eventDanger
 	default:
 		return m.styles.text
@@ -955,8 +956,8 @@ func timelineActorColumnWidth(rows []displayTimelineRow) int {
 	return width
 }
 
-func wrapTimelineRow(row displayTimelineRow, ts *timelineState, maxWidth int, timeWidth int, kindWidth int, actorWidth int) []string {
-	prefix, content, messageOffset := timelineRowPrefixAndContent(row, ts, timeWidth, kindWidth, actorWidth)
+func wrapTimelineRow(row displayTimelineRow, ts *timelineState, maxWidth int, timeWidth int, kindWidth int, actorWidth int, showContent bool) []string {
+	prefix, content, messageOffset := timelineRowPrefixAndContent(row, ts, timeWidth, kindWidth, actorWidth, showContent)
 	indent := ""
 	if messageOffset > 0 {
 		indent = timelineContinuationIndent(row, prefix, messageOffset)
@@ -979,10 +980,30 @@ func timelineContinuationIndent(row displayTimelineRow, prefix string, messageOf
 	return strings.Repeat(" ", lipgloss.Width(prefix)+messageOffset)
 }
 
-func timelineRowPrefixAndContent(row displayTimelineRow, ts *timelineState, timeWidth int, kindWidth int, actorWidth int) (string, string, int) {
+func timelineRowPrefixAndContent(row displayTimelineRow, ts *timelineState, timeWidth int, kindWidth int, actorWidth int, showContent bool) (string, string, int) {
 	marker := " ●  "
 	if ts != nil {
 		marker = ts.rowUnreadMarker(row)
+	}
+	if !showContent {
+		when := "?"
+		kind := "event"
+		actor := ""
+		if row.event != nil {
+			when = timeAgo(row.event.OccurredAt)
+			kind = eventKindLabel(*row.event)
+			actor = eventActorLabel(*row.event)
+		} else if row.isThreadHeader {
+			kind = "thread"
+		}
+		timeCol := padToDisplayWidth(when, max(1, timeWidth))
+		kindCol := padToDisplayWidth(kind, max(1, kindWidth))
+		parts := []string{timeCol, kindCol}
+		if actorWidth > 0 && actor != "" {
+			parts = append(parts, padToDisplayWidth(clampDisplayWidth(actor, actorWidth), actorWidth))
+		}
+		content := stringsJoin(parts, "  ")
+		return marker, content, 0
 	}
 	if row.event != nil {
 		when := timeAgo(row.event.OccurredAt)
