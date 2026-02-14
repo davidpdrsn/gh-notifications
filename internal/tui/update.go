@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"gh-pr/ghpr"
@@ -295,7 +296,7 @@ func (m *model) applyEffects(effects []Effect) {
 		case PersistParentReadStateEffect:
 			m.startParentReadStatePersist(e.OpID, e.Ref, e.Read)
 		case ArchiveNotificationEffect:
-			m.startArchiveNotification(e.OpID, e.ThreadID)
+			m.startArchiveNotification(e.OpID, e.ThreadID, e.UpdatedAt)
 		case ScheduleAutoRefreshTickEffect:
 			m.scheduleAutoRefreshTick()
 		case ScheduleRefreshSpinnerTickEffect:
@@ -412,7 +413,7 @@ func (m *model) startParentReadStatePersist(opID int64, ref string, read bool) {
 	}()
 }
 
-func (m *model) startArchiveNotification(opID int64, threadID string) {
+func (m *model) startArchiveNotification(opID int64, threadID string, updatedAt time.Time) {
 	go func() {
 		if m.client == nil {
 			m.msgCh <- archiveNotificationErrMsg{opID: opID, err: errors.New("client unavailable")}
@@ -421,6 +422,9 @@ func (m *model) startArchiveNotification(opID int64, threadID string) {
 		if err := m.client.ArchiveNotificationThread(m.ctx, threadID); err != nil {
 			m.msgCh <- archiveNotificationErrMsg{opID: opID, err: err}
 			return
+		}
+		if m.store != nil && !updatedAt.IsZero() {
+			_ = m.store.MarkThreadArchived(m.ctx, threadID, updatedAt)
 		}
 		m.msgCh <- archiveNotificationSucceededMsg{opID: opID}
 	}()
@@ -479,7 +483,22 @@ func (m *model) startNotificationsLoader(ctx context.Context, cancel context.Can
 		if cancel != nil {
 			defer cancel()
 		}
+		archived := map[string]time.Time{}
+		if m.store != nil {
+			if loaded, err := m.store.ListArchivedThreads(ctx); err == nil {
+				archived = loaded
+			}
+		}
 		err := m.client.StreamNotifications(ctx, func(item ghpr.NotificationEvent) error {
+			if shouldSkipArchivedNotification(item, archived) {
+				return nil
+			}
+			if shouldUnarchiveNotification(item, archived) {
+				delete(archived, item.ID)
+				if m.store != nil {
+					_ = m.store.UnmarkThreadArchived(ctx, item.ID)
+				}
+			}
 			m.msgCh <- notifArrivedMsg{gen: gen, item: item}
 			return nil
 		})
@@ -489,6 +508,31 @@ func (m *model) startNotificationsLoader(ctx context.Context, cancel context.Can
 		}
 		m.msgCh <- notifDoneMsg{gen: gen}
 	}()
+}
+
+func shouldSkipArchivedNotification(item ghpr.NotificationEvent, archived map[string]time.Time) bool {
+	if archived == nil || strings.TrimSpace(item.ID) == "" {
+		return false
+	}
+	archivedUpdatedAt, ok := archived[item.ID]
+	if !ok {
+		return false
+	}
+	if item.UpdatedAt.IsZero() {
+		return true
+	}
+	return !item.UpdatedAt.After(archivedUpdatedAt)
+}
+
+func shouldUnarchiveNotification(item ghpr.NotificationEvent, archived map[string]time.Time) bool {
+	if archived == nil || strings.TrimSpace(item.ID) == "" {
+		return false
+	}
+	archivedUpdatedAt, ok := archived[item.ID]
+	if !ok || item.UpdatedAt.IsZero() {
+		return false
+	}
+	return item.UpdatedAt.After(archivedUpdatedAt)
 }
 
 func (m *model) startTimelineLoader(ctx context.Context, gen int, ref string) {

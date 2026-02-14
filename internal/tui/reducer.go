@@ -208,8 +208,9 @@ type PersistParentReadStateEffect struct {
 }
 
 type ArchiveNotificationEffect struct {
-	OpID     int64
-	ThreadID string
+	OpID      int64
+	ThreadID  string
+	UpdatedAt time.Time
 }
 
 type OpenURLEffect struct{ URL string }
@@ -2597,7 +2598,7 @@ func confirmArchiveNotification(state *AppState, effects *[]Effect) {
 		threadID: confirm.threadID,
 		from:     confirm.from,
 	}
-	*effects = append(*effects, ArchiveNotificationEffect{OpID: opID, ThreadID: confirm.threadID})
+	*effects = append(*effects, ArchiveNotificationEffect{OpID: opID, ThreadID: confirm.threadID, UpdatedAt: n.updatedAt})
 	closeArchiveConfirm(state)
 	state.Status = "archiving notification..."
 }

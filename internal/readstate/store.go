@@ -52,6 +52,12 @@ CREATE TABLE IF NOT EXISTS parent_read_state (
   ref     TEXT NOT NULL PRIMARY KEY,
   read_at TEXT NOT NULL,
   source  TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS archived_thread_state (
+  thread_id           TEXT NOT NULL PRIMARY KEY,
+  archived_updated_at TEXT NOT NULL,
+  archived_at         TEXT NOT NULL,
+  source              TEXT NOT NULL
 );`
 	_, err := s.execSQL(ctx, schema)
 	if err != nil {
@@ -238,6 +244,82 @@ func (s *Store) ListParentRead(ctx context.Context, refs []string) (map[string]b
 		}
 		out[line] = true
 	}
+	return out, nil
+}
+
+func (s *Store) MarkThreadArchived(ctx context.Context, threadID string, archivedUpdatedAt time.Time) error {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return fmt.Errorf("thread id is empty")
+	}
+	if archivedUpdatedAt.IsZero() {
+		return fmt.Errorf("archived updated_at is empty")
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	updatedAt := archivedUpdatedAt.UTC().Format(time.RFC3339Nano)
+
+	var b strings.Builder
+	b.WriteString("INSERT INTO archived_thread_state(thread_id, archived_updated_at, archived_at, source) VALUES(")
+	b.WriteString(sqlQuote(threadID))
+	b.WriteString(",")
+	b.WriteString(sqlQuote(updatedAt))
+	b.WriteString(",")
+	b.WriteString(sqlQuote(now))
+	b.WriteString(",")
+	b.WriteString(sqlQuote("manual"))
+	b.WriteString(") ON CONFLICT(thread_id) DO UPDATE SET archived_updated_at=excluded.archived_updated_at, archived_at=excluded.archived_at, source=excluded.source;")
+
+	if _, err := s.execSQL(ctx, b.String()); err != nil {
+		return fmt.Errorf("mark thread as archived: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) UnmarkThreadArchived(ctx context.Context, threadID string) error {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return fmt.Errorf("thread id is empty")
+	}
+
+	var b strings.Builder
+	b.WriteString("DELETE FROM archived_thread_state WHERE thread_id=")
+	b.WriteString(sqlQuote(threadID))
+	b.WriteString(";")
+
+	if _, err := s.execSQL(ctx, b.String()); err != nil {
+		return fmt.Errorf("unmark thread as archived: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) ListArchivedThreads(ctx context.Context) (map[string]time.Time, error) {
+	out := make(map[string]time.Time)
+
+	stdout, err := s.execSQL(ctx, "SELECT thread_id || '|' || archived_updated_at FROM archived_thread_state;")
+	if err != nil {
+		return out, fmt.Errorf("list archived threads: %w", err)
+	}
+
+	for _, line := range strings.Split(strings.TrimSpace(stdout), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "|", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		threadID := strings.TrimSpace(parts[0])
+		if threadID == "" {
+			continue
+		}
+		ts, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(parts[1]))
+		if err != nil {
+			continue
+		}
+		out[threadID] = ts.UTC()
+	}
+
 	return out, nil
 }
 

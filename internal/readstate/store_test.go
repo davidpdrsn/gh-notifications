@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestStoreMarkReadAndUnread(t *testing.T) {
@@ -147,5 +148,77 @@ func TestStoreParentReadPersistsAcrossReopen(t *testing.T) {
 	}
 	if !got[ref] {
 		t.Fatalf("expected %q to remain parent-read across reopen, got=%v", ref, got)
+	}
+}
+
+func TestStoreMarkThreadArchivedAndUnmark(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "state.db")
+	store, err := Open(path)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	threadID := "123"
+	archivedUpdatedAt := time.Now().UTC().Add(-time.Minute).Round(0)
+	if err := store.MarkThreadArchived(ctx, threadID, archivedUpdatedAt); err != nil {
+		t.Fatalf("mark thread archived: %v", err)
+	}
+
+	got, err := store.ListArchivedThreads(ctx)
+	if err != nil {
+		t.Fatalf("list archived threads: %v", err)
+	}
+	if ts, ok := got[threadID]; !ok {
+		t.Fatalf("expected archived thread %q, got=%v", threadID, got)
+	} else if !ts.Equal(archivedUpdatedAt) {
+		t.Fatalf("expected archived_updated_at=%v, got=%v", archivedUpdatedAt, ts)
+	}
+
+	if err := store.UnmarkThreadArchived(ctx, threadID); err != nil {
+		t.Fatalf("unmark thread archived: %v", err)
+	}
+	got, err = store.ListArchivedThreads(ctx)
+	if err != nil {
+		t.Fatalf("list archived threads after unmark: %v", err)
+	}
+	if _, ok := got[threadID]; ok {
+		t.Fatalf("expected archived thread to be removed, got=%v", got)
+	}
+}
+
+func TestStoreArchivedThreadPersistsAcrossReopen(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "state.db")
+	threadID := "456"
+	archivedUpdatedAt := time.Now().UTC().Round(0)
+
+	store, err := Open(path)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	if err := store.MarkThreadArchived(ctx, threadID, archivedUpdatedAt); err != nil {
+		t.Fatalf("mark thread archived: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	got, err := reopened.ListArchivedThreads(ctx)
+	if err != nil {
+		t.Fatalf("list archived threads: %v", err)
+	}
+	if ts, ok := got[threadID]; !ok {
+		t.Fatalf("expected archived thread %q, got=%v", threadID, got)
+	} else if !ts.Equal(archivedUpdatedAt) {
+		t.Fatalf("expected archived_updated_at=%v, got=%v", archivedUpdatedAt, ts)
 	}
 }
