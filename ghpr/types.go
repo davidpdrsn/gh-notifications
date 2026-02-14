@@ -84,4 +84,5 @@ type ReviewRequestStatus struct {
 	Pending bool
 	Merged  bool
 	Closed  bool
+	Draft   bool
 }

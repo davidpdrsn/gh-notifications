@@ -171,6 +171,7 @@ type AppState struct {
 	ReviewReqByRef              map[string]bool
 	ReviewReqMergedByRef        map[string]bool
 	ReviewReqClosedByRef        map[string]bool
+	ReviewReqDraftByRef         map[string]bool
 	ReviewReqLoadedByRef        map[string]bool
 	ReviewReqLoadInFlightByRef  map[string]bool
 }
@@ -230,6 +231,7 @@ func NewState() AppState {
 		ReviewReqByRef:              make(map[string]bool),
 		ReviewReqMergedByRef:        make(map[string]bool),
 		ReviewReqClosedByRef:        make(map[string]bool),
+		ReviewReqDraftByRef:         make(map[string]bool),
 		ReviewReqLoadedByRef:        make(map[string]bool),
 		ReviewReqLoadInFlightByRef:  make(map[string]bool),
 	}

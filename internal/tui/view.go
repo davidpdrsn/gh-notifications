@@ -244,14 +244,15 @@ func (m *model) renderNotifications(width, height int) string {
 		end = len(visible)
 	}
 	timeColWidth := notificationTimeColumnWidth(visible)
-	kindColWidth := notificationKindColumnWidth(visible)
+	kindColWidth := notificationKindColumnWidthForState(m.state, visible)
 	repoColWidth := notificationRepoColumnWidth(visible)
 	for i := start; i < end; i++ {
 		n := visible[i]
 		marker := m.state.notificationUnreadMarker(n)
 		waitingOnMe := strings.TrimSpace(n.kind) == "pr" && m.state.ReviewReqByRef[n.ref]
+		draftPR := strings.TrimSpace(n.kind) == "pr" && m.state.ReviewReqDraftByRef[n.ref]
 		prefix := marker + padToDisplayWidth(timeAgo(n.updatedAt), timeColWidth) + " "
-		kind := padToDisplayWidth(notificationKindLabel(n.kind), kindColWidth)
+		kind := padToDisplayWidth(notificationKindLabelForNotification(m.state, n), kindColWidth)
 		repo := padToDisplayWidth(clampDisplayWidth(oneLine(n.repo), repoColWidth), repoColWidth)
 		label := prefix + kind + " " + repo + "  " + oneLine(n.title)
 		avail := paneContentWidthWithRelativeNumbers(width, height)
@@ -276,12 +277,12 @@ func (m *model) renderNotifications(width, height int) string {
 		}
 		if current || marked {
 			for _, seg := range wrapped {
-				lines = append(lines, m.renderNotificationStyledLine(seg, avail, timeColWidth+5, kindColWidth, n.kind, waitingOnMe, current, marked))
+				lines = append(lines, m.renderNotificationStyledLine(seg, avail, timeColWidth+5, kindColWidth, n.kind, waitingOnMe, draftPR, current, marked))
 				rowIndexByLine = append(rowIndexByLine, i)
 			}
 		} else {
 			for _, seg := range wrapped {
-				lines = append(lines, m.renderNotificationStyledLine(seg, avail, timeColWidth+5, kindColWidth, n.kind, waitingOnMe, false, false))
+				lines = append(lines, m.renderNotificationStyledLine(seg, avail, timeColWidth+5, kindColWidth, n.kind, waitingOnMe, draftPR, false, false))
 				rowIndexByLine = append(rowIndexByLine, i)
 			}
 		}
@@ -399,6 +400,13 @@ func notificationKindLabel(kind string) string {
 	}
 }
 
+func notificationKindLabelForNotification(state AppState, n notifRow) string {
+	if strings.TrimSpace(strings.ToLower(n.kind)) == "pr" && state.ReviewReqDraftByRef[n.ref] {
+		return "draft"
+	}
+	return notificationKindLabel(n.kind)
+}
+
 func notificationKindColumnWidth(rows []notifRow) int {
 	width := 2
 	for i := range rows {
@@ -411,7 +419,24 @@ func notificationKindColumnWidth(rows []notifRow) int {
 		width = 2
 	}
 	if width > 2 {
-		return 2
+		return width
+	}
+	return width
+}
+
+func notificationKindColumnWidthForState(state AppState, rows []notifRow) int {
+	width := 2
+	for i := range rows {
+		w := lipgloss.Width(notificationKindLabelForNotification(state, rows[i]))
+		if w > width {
+			width = w
+		}
+	}
+	if width < 2 {
+		width = 2
+	}
+	if width > 8 {
+		return 8
 	}
 	return width
 }
@@ -427,7 +452,7 @@ func renderNotificationTimestamp(line string, width int, style lipgloss.Style) s
 	return style.Render(prefix) + rest
 }
 
-func (m *model) renderNotificationStyledLine(line string, width int, timeWidth int, kindWidth int, kind string, waitingOnMe bool, current bool, marked bool) string {
+func (m *model) renderNotificationStyledLine(line string, width int, timeWidth int, kindWidth int, kind string, waitingOnMe bool, draftPR bool, current bool, marked bool) string {
 	if width < 1 {
 		width = 1
 	}
@@ -445,7 +470,7 @@ func (m *model) renderNotificationStyledLine(line string, width int, timeWidth i
 		}
 		kindCol, tail := splitAtExactDisplayWidth(content, kindWidth)
 		sep, body := splitAtExactDisplayWidth(tail, 1)
-		kindStyle := m.kindStyle(kindCol, waitingOnMe, current, marked)
+		kindStyle := m.kindStyle(kindCol, waitingOnMe, draftPR, current, marked)
 		kindRendered := kindStyle.Render(kindCol)
 		if current {
 			return kindRendered + m.styles.current.Render(sep+body)
@@ -498,9 +523,9 @@ func (m *model) notificationMarkerStyle(marker string, current bool, marked bool
 	return m.styles.unreadMarker
 }
 
-func (m *model) kindStyle(kind string, waitingOnMe bool, current bool, marked bool) lipgloss.Style {
+func (m *model) kindStyle(kind string, waitingOnMe bool, draftPR bool, current bool, marked bool) lipgloss.Style {
 	normalized := strings.TrimSpace(strings.ToLower(kind))
-	if waitingOnMe && normalized == "pr" {
+	if waitingOnMe {
 		if current {
 			return m.styles.kindPRWaitCur
 		}
@@ -508,6 +533,15 @@ func (m *model) kindStyle(kind string, waitingOnMe bool, current bool, marked bo
 			return m.styles.kindPRWaitSel
 		}
 		return m.styles.kindPRWaiting
+	}
+	if draftPR {
+		if current {
+			return m.styles.kindPRDraftCur
+		}
+		if marked {
+			return m.styles.kindPRDraftSel
+		}
+		return m.styles.kindPRDraft
 	}
 	if current {
 		switch normalized {

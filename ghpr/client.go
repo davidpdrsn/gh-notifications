@@ -157,10 +157,10 @@ func (c *Client) ReviewRequestStatusForViewer(ctx context.Context, ref string, v
 		return ReviewRequestStatus{}, err
 	}
 	if pr.MergedAt != nil {
-		return ReviewRequestStatus{Merged: true}, nil
+		return ReviewRequestStatus{Merged: true, Draft: pr.Draft}, nil
 	}
 	if !strings.EqualFold(strings.TrimSpace(pr.State), "open") {
-		return ReviewRequestStatus{Closed: true}, nil
+		return ReviewRequestStatus{Closed: true, Draft: pr.Draft}, nil
 	}
 	requested, err := c.github.FetchRequestedReviewers(ctx, parsed.Owner, parsed.Repo, parsed.Number)
 	if err != nil {
@@ -168,10 +168,10 @@ func (c *Client) ReviewRequestStatusForViewer(ctx context.Context, ref string, v
 	}
 	for _, u := range requested.Users {
 		if strings.EqualFold(strings.TrimSpace(u.Login), viewerLogin) {
-			return ReviewRequestStatus{Pending: true}, nil
+			return ReviewRequestStatus{Pending: true, Draft: pr.Draft}, nil
 		}
 	}
-	return ReviewRequestStatus{}, nil
+	return ReviewRequestStatus{Draft: pr.Draft}, nil
 }
 
 func (c *Client) streamPRTimeline(ctx context.Context, owner, repo string, number int, emit func(timelineapi.Event) error, onWarning func(string)) error {

@@ -731,7 +731,7 @@ func TestSelectedUnreadTimelineRowKeepsSelectionBackgroundOnMarker(t *testing.T)
 func TestSelectedUnreadNotificationRowKeepsMarkerAndSelectedTimestampStyling(t *testing.T) {
 	m := newModel(context.Background(), nil, nil)
 	line := " ●  1h owner/repo  Add support for marker styling"
-	out := m.renderNotificationStyledLine(line, 70, 8, 2, "pr", false, false, true)
+	out := m.renderNotificationStyledLine(line, 70, 8, 2, "pr", false, false, false, true)
 
 	if !strings.Contains(out, m.styles.unreadSelected.Render(" ●  ")) {
 		t.Fatalf("expected selected unread marker style, got %q", out)
@@ -752,7 +752,7 @@ func TestSelectedUnreadNotificationRowKeepsMarkerAndSelectedTimestampStyling(t *
 func TestSelectedPartialNotificationRowKeepsMarkerStyling(t *testing.T) {
 	m := newModel(context.Background(), nil, nil)
 	line := " ◐  1h owner/repo  Partial read state"
-	out := m.renderNotificationStyledLine(line, 70, 8, 2, "pr", false, false, true)
+	out := m.renderNotificationStyledLine(line, 70, 8, 2, "pr", false, false, false, true)
 
 	if !strings.Contains(out, m.styles.unreadSelected.Render(" ◐  ")) {
 		t.Fatalf("expected selected partial marker style, got %q", out)
@@ -762,7 +762,7 @@ func TestSelectedPartialNotificationRowKeepsMarkerStyling(t *testing.T) {
 func TestCurrentNotificationRowUsesCurrentBackgroundStyling(t *testing.T) {
 	m := newModel(context.Background(), nil, nil)
 	line := " ●  1h owner/repo  Current row"
-	out := m.renderNotificationStyledLine(line, 70, 8, 2, "pr", false, true, false)
+	out := m.renderNotificationStyledLine(line, 70, 8, 2, "pr", false, false, true, false)
 
 	if !strings.Contains(out, m.styles.unreadCurrent.Render(" ●  ")) {
 		t.Fatalf("expected current unread marker style, got %q", out)
@@ -772,7 +772,7 @@ func TestCurrentNotificationRowUsesCurrentBackgroundStyling(t *testing.T) {
 func TestResolvedPRMarkerUsesMutedStyling(t *testing.T) {
 	m := newModel(context.Background(), nil, nil)
 	line := " +  1h pr owner/repo  merged"
-	out := m.renderNotificationStyledLine(line, 70, 8, 2, "pr", false, false, false)
+	out := m.renderNotificationStyledLine(line, 70, 8, 2, "pr", false, false, false, false)
 
 	if !strings.Contains(out, m.styles.muted.Render(" +  ")) {
 		t.Fatalf("expected resolved marker to use muted style, got %q", out)
@@ -782,7 +782,7 @@ func TestResolvedPRMarkerUsesMutedStyling(t *testing.T) {
 func TestCurrentStyleTakesPrecedenceOverMarkedStyleForNotificationRow(t *testing.T) {
 	m := newModel(context.Background(), nil, nil)
 	line := " ●  1h pr owner/repo  both current and marked"
-	out := m.renderNotificationStyledLine(line, 70, 8, 2, "pr", false, true, true)
+	out := m.renderNotificationStyledLine(line, 70, 8, 2, "pr", false, false, true, true)
 
 	if !strings.Contains(out, m.styles.unreadCurrent.Render(" ●  ")) {
 		t.Fatalf("expected current marker style when row is both current and marked, got %q", out)
@@ -832,6 +832,30 @@ func TestRenderNotificationsHighlightsWaitingOnMyReviewPR(t *testing.T) {
 	out := m.renderNotifications(leftW, paneInnerHeight(m.state))
 	if !strings.Contains(out, m.styles.kindPRWaitCur.Render("pr")) {
 		t.Fatalf("expected waiting-on-my-review pr kind style in output")
+	}
+}
+
+func TestRenderNotificationsShowsDraftPRLabelMuted(t *testing.T) {
+	m := newModel(context.Background(), nil, nil)
+	m.state.Width = 100
+	m.state.Height = 20
+	m.state.Notifications = []notifRow{{
+		id:        "n1",
+		repo:      "owner/repo",
+		kind:      "pr",
+		ref:       "owner/repo#1",
+		title:     "draft",
+		updatedAt: time.Now().UTC(),
+	}}
+	m.state.rebuildNotifIndex()
+	m.state.SelectedNotif = "n1"
+	m.state.NotifSelected = 0
+	m.state.ReviewReqDraftByRef["owner/repo#1"] = true
+
+	leftW, _, _ := paneWidths(panesTotalWidth(m.state.Width, m.state.Focus, m.state.currentPaneMode()), m.state.Focus, m.state.currentPaneMode())
+	out := m.renderNotifications(leftW, paneInnerHeight(m.state))
+	if !strings.Contains(out, m.styles.kindPRDraftCur.Render("draft")) {
+		t.Fatalf("expected draft pr kind label to use muted style")
 	}
 }
 

@@ -400,7 +400,7 @@ func notificationSelectionVisibleWithWrap(state AppState) bool {
 		avail = 1
 	}
 	timeColWidth := notificationTimeColumnWidth(state.Notifications)
-	kindColWidth := notificationKindColumnWidth(state.Notifications)
+	kindColWidth := notificationKindColumnWidthForState(state, state.Notifications)
 	repoColWidth := notificationRepoColumnWidth(state.Notifications)
 
 	used := 0
@@ -408,7 +408,7 @@ func notificationSelectionVisibleWithWrap(state AppState) bool {
 	selectedHeight := 1
 	for i := state.NotifScroll; i < len(state.Notifications); i++ {
 		prefix := padToDisplayWidth(timeAgo(state.Notifications[i].updatedAt), timeColWidth) + " "
-		kind := padToDisplayWidth(notificationKindLabel(state.Notifications[i].kind), kindColWidth)
+		kind := padToDisplayWidth(notificationKindLabelForNotification(state, state.Notifications[i]), kindColWidth)
 		repo := padToDisplayWidth(clampDisplayWidth(oneLine(state.Notifications[i].repo), repoColWidth), repoColWidth)
 		label := prefix + kind + " " + repo + "  " + oneLine(state.Notifications[i].title)
 		h := len(wrapDisplayWidth(label, avail, strings.Repeat(" ", lipgloss.Width(prefix)+kindColWidth+1+repoColWidth+2)))

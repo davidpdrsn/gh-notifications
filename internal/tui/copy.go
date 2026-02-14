@@ -45,10 +45,10 @@ func notificationsColumnText(state AppState) string {
 	}
 
 	lines := make([]string, 0, len(visible))
-	kindColWidth := notificationKindColumnWidth(visible)
+	kindColWidth := notificationKindColumnWidthForState(state, visible)
 	repoColWidth := notificationRepoColumnWidth(visible)
 	for _, n := range visible {
-		kind := padToDisplayWidth(notificationKindLabel(n.kind), kindColWidth)
+		kind := padToDisplayWidth(notificationKindLabelForNotification(state, n), kindColWidth)
 		repo := padToDisplayWidth(oneLine(n.repo), repoColWidth)
 		line := strings.TrimSpace(stringsJoin([]string{kind, repo, oneLine(n.title)}, "  "))
 		if line == "" {

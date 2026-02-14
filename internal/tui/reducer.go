@@ -91,6 +91,7 @@ type ReviewReqStateLoadedEvent struct {
 	PendingRefs []string
 	MergedRefs  []string
 	ClosedRefs  []string
+	DraftRefs   []string
 }
 
 type ReviewReqStateLoadFailedEvent struct {
@@ -420,6 +421,7 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 				delete(state.ReviewReqByRef, e.Item.Target.Ref)
 				delete(state.ReviewReqMergedByRef, e.Item.Target.Ref)
 				delete(state.ReviewReqClosedByRef, e.Item.Target.Ref)
+				delete(state.ReviewReqDraftByRef, e.Item.Target.Ref)
 				delete(state.ReviewReqLoadedByRef, e.Item.Target.Ref)
 				delete(state.ReviewReqLoadInFlightByRef, e.Item.Target.Ref)
 				invalidateNotifMarkerCacheForRef(&state, e.Item.Target.Ref)
@@ -674,6 +676,14 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 			}
 			closed[ref] = true
 		}
+		draft := make(map[string]bool, len(e.DraftRefs))
+		for _, ref := range e.DraftRefs {
+			ref = strings.TrimSpace(ref)
+			if ref == "" {
+				continue
+			}
+			draft[ref] = true
+		}
 		for _, ref := range e.Refs {
 			ref = strings.TrimSpace(ref)
 			if ref == "" {
@@ -695,6 +705,11 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 				state.ReviewReqClosedByRef[ref] = true
 			} else {
 				delete(state.ReviewReqClosedByRef, ref)
+			}
+			if draft[ref] {
+				state.ReviewReqDraftByRef[ref] = true
+			} else {
+				delete(state.ReviewReqDraftByRef, ref)
 			}
 			invalidateNotifMarkerCacheForRef(&state, ref)
 		}
@@ -1699,10 +1714,10 @@ func notificationRowWrappedHeight(state AppState, visible []notifRow, i int) int
 		avail = 1
 	}
 	timeColWidth := notificationTimeColumnWidth(visible)
-	kindColWidth := notificationKindColumnWidth(visible)
+	kindColWidth := notificationKindColumnWidthForState(state, visible)
 	repoColWidth := notificationRepoColumnWidth(visible)
 	prefix := padToDisplayWidth(timeAgo(visible[i].updatedAt), timeColWidth) + " "
-	kind := padToDisplayWidth(notificationKindLabel(visible[i].kind), kindColWidth)
+	kind := padToDisplayWidth(notificationKindLabelForNotification(state, visible[i]), kindColWidth)
 	repo := padToDisplayWidth(clampDisplayWidth(oneLine(visible[i].repo), repoColWidth), repoColWidth)
 	label := prefix + kind + " " + repo + "  " + oneLine(visible[i].title)
 	titleIndent := strings.Repeat(" ", lipgloss.Width(prefix)+kindColWidth+1+repoColWidth+2)
@@ -2254,14 +2269,14 @@ func ensureNotificationSelectionVisible(state *AppState) {
 		avail = 1
 	}
 	timeColWidth := notificationTimeColumnWidth(visible)
-	kindColWidth := notificationKindColumnWidth(visible)
+	kindColWidth := notificationKindColumnWidthForState(*state, visible)
 	repoColWidth := notificationRepoColumnWidth(visible)
 	state.NotifScroll = clampWrappedScroll(state.NotifScroll, state.NotifSelected, len(visible), viewport, func(i int) int {
 		if i < 0 || i >= len(visible) {
 			return 1
 		}
 		prefix := padToDisplayWidth(timeAgo(visible[i].updatedAt), timeColWidth) + " "
-		kind := padToDisplayWidth(notificationKindLabel(visible[i].kind), kindColWidth)
+		kind := padToDisplayWidth(notificationKindLabelForNotification(*state, visible[i]), kindColWidth)
 		repo := padToDisplayWidth(clampDisplayWidth(oneLine(visible[i].repo), repoColWidth), repoColWidth)
 		label := prefix + kind + " " + repo + "  " + oneLine(visible[i].title)
 		titleIndent := strings.Repeat(" ", lipgloss.Width(prefix)+kindColWidth+1+repoColWidth+2)
