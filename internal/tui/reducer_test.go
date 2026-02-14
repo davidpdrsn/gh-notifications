@@ -2088,6 +2088,53 @@ func TestNotificationUnreadMarkerUsesCacheWhileReadStateUnknown(t *testing.T) {
 	}
 }
 
+func TestNotificationUnreadMarkerUsesLoadedParentReadWithoutTimeline(t *testing.T) {
+	state := NewState()
+	n := notifRow{id: "n1", repo: "o/r", ref: "o/r#1", title: "t"}
+	state.Notifications = []notifRow{n}
+	state.rebuildNotifIndex()
+	state.notifMarkerByRef[n.ref] = " ●  "
+	state.ParentReadLoadedByRef[n.ref] = true
+	state.ParentReadByRef[n.ref] = true
+
+	if got := state.notificationUnreadMarker(n); got != "    " {
+		t.Fatalf("expected read marker from loaded parent state, got %q", got)
+	}
+}
+
+func TestNotificationUnreadMarkerUsesLoadedParentUnreadWithoutTimeline(t *testing.T) {
+	state := NewState()
+	n := notifRow{id: "n1", repo: "o/r", ref: "o/r#1", title: "t"}
+	state.Notifications = []notifRow{n}
+	state.rebuildNotifIndex()
+	state.notifMarkerByRef[n.ref] = "    "
+	state.ParentReadLoadedByRef[n.ref] = true
+
+	if got := state.notificationUnreadMarker(n); got != " ●  " {
+		t.Fatalf("expected unread marker from loaded parent unread state, got %q", got)
+	}
+}
+
+func TestParentReadLoadedEventInvalidatesNotificationMarkerCache(t *testing.T) {
+	state := NewState()
+	n := notifRow{id: "n1", repo: "o/r", ref: "o/r#1", title: "t"}
+	state.Notifications = []notifRow{n}
+	state.rebuildNotifIndex()
+	state.notifMarkerByRef[n.ref] = "    "
+
+	state, _ = Reduce(state, ParentReadStateLoadedEvent{Refs: []string{n.ref}, ReadRefs: []string{}})
+	if !state.ParentReadLoadedByRef[n.ref] {
+		t.Fatalf("expected parent read loaded for ref")
+	}
+	if state.ParentReadByRef[n.ref] {
+		t.Fatalf("expected parent read false for ref")
+	}
+
+	if got := state.notificationUnreadMarker(n); got != " ●  " {
+		t.Fatalf("expected marker cache to be invalidated after parent load, got %q", got)
+	}
+}
+
 func TestMotionCountPrefixMovesMultipleRows(t *testing.T) {
 	state := NewState()
 	state.Focus = focusNotifications

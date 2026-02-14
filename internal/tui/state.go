@@ -738,6 +738,9 @@ func (s *AppState) notificationReadState(n notifRow) (known bool, read bool) {
 	if s.ParentReadByRef[n.ref] {
 		return true, true
 	}
+	if s.ParentReadLoadedByRef[n.ref] {
+		return true, false
+	}
 	ts := s.TimelineByRef[n.ref]
 	if ts == nil {
 		return false, false
@@ -765,13 +768,23 @@ func (s *AppState) notificationUnreadMarker(n notifRow) string {
 	if s.notifMarkerByRef == nil {
 		s.notifMarkerByRef = make(map[string]string)
 	}
+	known, read := s.notificationReadState(n)
+	if known {
+		if read {
+			s.notifMarkerByRef[n.ref] = "    "
+			return "    "
+		}
+		if ts == nil {
+			s.notifMarkerByRef[n.ref] = " ●  "
+			return " ●  "
+		}
+	}
 	if ts == nil {
 		if cached, ok := s.notifMarkerByRef[n.ref]; ok {
 			return cached
 		}
 		return " ●  "
 	}
-	known, read := s.notificationReadState(n)
 	if !known {
 		if cached, ok := s.notifMarkerByRef[n.ref]; ok {
 			return cached
@@ -784,6 +797,10 @@ func (s *AppState) notificationUnreadMarker(n notifRow) string {
 	}
 	ids := ts.allEventIDs()
 	if len(ids) == 0 {
+		if !read {
+			s.notifMarkerByRef[n.ref] = " ●  "
+			return " ●  "
+		}
 		s.notifMarkerByRef[n.ref] = "    "
 		return "    "
 	}

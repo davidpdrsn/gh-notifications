@@ -538,6 +538,7 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 			} else {
 				delete(state.ParentReadByRef, ref)
 			}
+			invalidateNotifMarkerCacheForRef(&state, ref)
 		}
 	case ParentReadStateLoadFailedEvent:
 		for _, ref := range e.Refs {
@@ -562,6 +563,7 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 		} else {
 			delete(state.ParentReadByRef, pending.ref)
 		}
+		invalidateNotifMarkerCacheForRef(&state, pending.ref)
 		state.Status = "failed to persist parent read state: " + e.Err
 	case ArchiveNotificationSucceededEvent:
 		pending, ok := state.PendingArchive[e.OpID]
@@ -2020,6 +2022,17 @@ func visibleRefs(rows []notifRow) []string {
 	return refs
 }
 
+func invalidateNotifMarkerCacheForRef(state *AppState, ref string) {
+	if state == nil || state.notifMarkerByRef == nil {
+		return
+	}
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return
+	}
+	delete(state.notifMarkerByRef, ref)
+}
+
 func setParentReadOverride(state *AppState, effects *[]Effect, ref string, read bool) {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
@@ -2045,6 +2058,7 @@ func setParentReadOverride(state *AppState, effects *[]Effect, ref string, read 
 	} else {
 		delete(state.ParentReadByRef, ref)
 	}
+	invalidateNotifMarkerCacheForRef(state, ref)
 
 	state.NextReadOpID++
 	opID := state.NextReadOpID
