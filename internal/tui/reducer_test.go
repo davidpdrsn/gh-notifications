@@ -818,6 +818,45 @@ func TestCtrlDUScrollsFocusedTimelineByTen(t *testing.T) {
 	}
 }
 
+func TestCtrlDUKeepsTimelineSelectionVisibleWithWrappedRows(t *testing.T) {
+	state := NewState()
+	state.Width = 60
+	state.Height = 8
+	state.Focus = focusTimeline
+	state.CurrentRef = "o/r#1"
+	state.TimelineByRef[state.CurrentRef] = &timelineState{
+		ref:             state.CurrentRef,
+		rowIndexByID:    map[string]int{},
+		threadByID:      map[string]*threadGroup{},
+		expandedThreads: map[string]bool{},
+	}
+	ts := state.TimelineByRef[state.CurrentRef]
+	long := strings.Repeat("wrapped timeline row content ", 25)
+	for i := 0; i < 20; i++ {
+		id := fmt.Sprintf("wd%d", i)
+		ts.insertTimelineEvent(ghpr.TimelineEvent{
+			ID:         id,
+			Type:       "github.timeline.commented",
+			OccurredAt: time.Now().Add(time.Duration(i) * time.Minute),
+			Comment:    &ghpr.CommentContext{Body: &long},
+		})
+	}
+	ts.selectedID = eventRowID("wd0")
+
+	for i := 0; i < 3; i++ {
+		state, _ = Reduce(state, KeyEvent{Key: "ctrl+d"})
+		if !timelineSelectionVisibleWithWrap(state) {
+			t.Fatalf("expected timeline selection visible after ctrl+d #%d; selected=%d scroll=%d", i+1, ts.selectedIndex, ts.scrollOffset)
+		}
+	}
+	for i := 0; i < 3; i++ {
+		state, _ = Reduce(state, KeyEvent{Key: "ctrl+u"})
+		if !timelineSelectionVisibleWithWrap(state) {
+			t.Fatalf("expected timeline selection visible after ctrl+u #%d; selected=%d scroll=%d", i+1, ts.selectedIndex, ts.scrollOffset)
+		}
+	}
+}
+
 func TestDetailArrowMovesLeftPaneSelectionInDetailFocus(t *testing.T) {
 	state := NewState()
 	state.Width = 90

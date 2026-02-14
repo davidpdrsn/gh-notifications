@@ -863,25 +863,205 @@ func scrollFocusedPaneDown(state *AppState, effects *[]Effect, n int) {
 	if n < 1 {
 		n = 1
 	}
-	if state.Focus == focusDetail {
+	switch state.Focus {
+	case focusDetail:
 		state.DetailScroll += n
-		return
+	case focusNotifications:
+		scrollNotificationsByWrappedLines(state, effects, n)
+	case focusTimeline:
+		scrollTimelineByWrappedLines(state, n)
+	case focusThread:
+		scrollThreadByWrappedLines(state, n)
+	default:
+		scrollTimelineByWrappedLines(state, n)
 	}
-	moveDownN(state, effects, n)
 }
 
 func scrollFocusedPaneUp(state *AppState, effects *[]Effect, n int) {
 	if n < 1 {
 		n = 1
 	}
-	if state.Focus == focusDetail {
+	switch state.Focus {
+	case focusDetail:
 		state.DetailScroll -= n
 		if state.DetailScroll < 0 {
 			state.DetailScroll = 0
 		}
+	case focusNotifications:
+		scrollNotificationsByWrappedLines(state, effects, -n)
+	case focusTimeline:
+		scrollTimelineByWrappedLines(state, -n)
+	case focusThread:
+		scrollThreadByWrappedLines(state, -n)
+	default:
+		scrollTimelineByWrappedLines(state, -n)
+	}
+}
+
+func scrollNotificationsByWrappedLines(state *AppState, effects *[]Effect, delta int) {
+	visible := state.visibleNotifications()
+	if len(visible) == 0 || state.SelectedNotif == "" || delta == 0 {
 		return
 	}
-	moveUpN(state, effects, n)
+	idx := indexOfNotificationByID(visible, state.SelectedNotif)
+	if idx < 0 {
+		return
+	}
+
+	remaining := abs(delta)
+	if delta > 0 {
+		for idx < len(visible)-1 && remaining > 0 {
+			idx++
+			remaining -= notificationRowWrappedHeight(*state, visible, idx)
+		}
+	} else {
+		for idx > 0 && remaining > 0 {
+			idx--
+			remaining -= notificationRowWrappedHeight(*state, visible, idx)
+		}
+	}
+
+	state.NotifSelected = idx
+	selectNotificationByID(state, effects, visible[idx].id)
+}
+
+func notificationRowWrappedHeight(state AppState, visible []notifRow, i int) int {
+	if i < 0 || i >= len(visible) {
+		return 1
+	}
+	viewport := notificationViewportRows(state)
+	mode := state.currentPaneMode()
+	leftW, _, _ := paneWidths(panesTotalWidth(state.Width, state.Focus, mode), state.Focus, mode)
+	avail := paneContentWidthWithRelativeNumbers(leftW, viewport)
+	if avail < 1 {
+		avail = 1
+	}
+	timeColWidth := notificationTimeColumnWidth(visible)
+	repoColWidth := notificationRepoColumnWidth(visible)
+	prefix := padToDisplayWidth(timeAgo(visible[i].updatedAt), timeColWidth) + " "
+	repo := padToDisplayWidth(clampDisplayWidth(oneLine(visible[i].repo), repoColWidth), repoColWidth)
+	label := prefix + repo + "  " + oneLine(visible[i].title)
+	titleIndent := strings.Repeat(" ", lipgloss.Width(prefix)+repoColWidth+2)
+	h := len(wrapDisplayWidth(label, avail, titleIndent))
+	if h < 1 {
+		return 1
+	}
+	return h
+}
+
+func scrollTimelineByWrappedLines(state *AppState, delta int) {
+	ts := state.currentTimeline()
+	if ts == nil || delta == 0 {
+		return
+	}
+	rows := ts.rowsReadyForDisplay(ts.displayRows(state.HideRead))
+	if len(rows) == 0 {
+		return
+	}
+	idx := indexOfTimelineSelection(rows, ts.selectedID)
+	if idx < 0 {
+		idx = 0
+	}
+
+	viewport := timelineViewportRows(*state)
+	mode := state.currentPaneMode()
+	_, midW, _ := paneWidths(panesTotalWidth(state.Width, state.Focus, mode), state.Focus, mode)
+	avail := paneContentWidthWithRelativeNumbers(midW, viewport)
+	if avail < 1 {
+		avail = 1
+	}
+	timeWidth := timelineTimeColumnWidth(rows)
+	kindWidth := timelineKindColumnWidth(rows)
+	actorWidth := timelineActorColumnWidth(rows)
+
+	height := func(i int) int {
+		if i < 0 || i >= len(rows) {
+			return 1
+		}
+		h := len(wrapTimelineRow(rows[i], ts, avail, timeWidth, kindWidth, actorWidth))
+		if h < 1 {
+			return 1
+		}
+		return h
+	}
+
+	remaining := abs(delta)
+	if delta > 0 {
+		for idx < len(rows)-1 && remaining > 0 {
+			idx++
+			remaining -= height(idx)
+		}
+	} else {
+		for idx > 0 && remaining > 0 {
+			idx--
+			remaining -= height(idx)
+		}
+	}
+
+	ts.selectedIndex = idx
+	ts.selectedID = rows[idx].id
+	ensureTimelineSelectionVisible(state, ts)
+	state.DetailScroll = 0
+}
+
+func scrollThreadByWrappedLines(state *AppState, delta int) {
+	ts := state.currentTimeline()
+	if ts == nil || ts.activeThreadID == "" || delta == 0 {
+		return
+	}
+	rows := ts.rowsReadyForDisplay(ts.threadRows(ts.activeThreadID, state.HideRead))
+	if len(rows) == 0 {
+		return
+	}
+	idx := indexOfThreadSelection(rows, ts.threadSelectedID)
+	if idx < 0 {
+		idx = 0
+	}
+
+	viewport := timelineViewportRows(*state)
+	mode := state.currentPaneMode()
+	_, midW, _ := paneWidths(panesTotalWidth(state.Width, state.Focus, mode), state.Focus, mode)
+	avail := paneContentWidthWithRelativeNumbers(midW, viewport)
+	if avail < 1 {
+		avail = 1
+	}
+	actorWidth := timelineActorColumnWidth(rows)
+
+	height := func(i int) int {
+		if i < 0 || i >= len(rows) {
+			return 1
+		}
+		h := len(wrapThreadRow(rows[i], ts, avail, actorWidth))
+		if h < 1 {
+			return 1
+		}
+		return h
+	}
+
+	remaining := abs(delta)
+	if delta > 0 {
+		for idx < len(rows)-1 && remaining > 0 {
+			idx++
+			remaining -= height(idx)
+		}
+	} else {
+		for idx > 0 && remaining > 0 {
+			idx--
+			remaining -= height(idx)
+		}
+	}
+
+	ts.threadSelectedIndex = idx
+	ts.threadSelectedID = rows[idx].id
+	ensureThreadSelectionVisible(state, ts)
+	state.DetailScroll = 0
+}
+
+func abs(n int) int {
+	if n < 0 {
+		return -n
+	}
+	return n
 }
 
 func jumpToTopOfFocusedPane(state *AppState, effects *[]Effect) {
