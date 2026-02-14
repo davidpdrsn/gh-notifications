@@ -63,7 +63,7 @@ func (m *model) View() string {
 	}
 	status := m.styles.status.Width(m.state.Width).Render(" " + m.bottomStatus())
 	base := lipgloss.JoinVertical(lipgloss.Left, row, status)
-	if m.state.ArchiveConfirmOpen {
+	if m.state.ArchiveConfirm != nil {
 		return overlayModalCentered(base, m.renderArchiveConfirmModal(), m.state.Width, m.state.Height)
 	}
 	return base

@@ -113,7 +113,7 @@ func waitForAsyncMsg(ch <-chan tea.Msg) tea.Cmd {
 }
 
 func (m *model) debugStatus() string {
-	if m.state.ArchiveConfirmOpen {
+	if m.state.ArchiveConfirm != nil {
 		parts := []string{"a confirm", "esc cancel"}
 		return stringsJoin(parts, "   ")
 	}

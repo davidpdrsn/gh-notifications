@@ -2411,11 +2411,11 @@ func TestArchiveKeyOpensConfirmFromNonNotificationPanes(t *testing.T) {
 
 			next, effects := Reduce(state, KeyEvent{Key: "a"})
 
-			if !next.ArchiveConfirmOpen {
+			if next.ArchiveConfirm == nil {
 				t.Fatalf("expected archive confirm to open")
 			}
-			if next.ArchiveConfirmThreadID != "42" {
-				t.Fatalf("expected target thread id 42, got %q", next.ArchiveConfirmThreadID)
+			if next.ArchiveConfirm.threadID != "42" {
+				t.Fatalf("expected target thread id 42, got %q", next.ArchiveConfirm.threadID)
 			}
 			if len(effects) != 0 {
 				t.Fatalf("expected no side effects before confirmation, got %d", len(effects))
@@ -2447,7 +2447,7 @@ func TestArchiveConfirmMarksReadAndRemovesNotificationOnSuccess(t *testing.T) {
 	next, _ := Reduce(state, KeyEvent{Key: "a"})
 	next, effects := Reduce(next, KeyEvent{Key: "a"})
 
-	if next.ArchiveConfirmOpen {
+	if next.ArchiveConfirm != nil {
 		t.Fatalf("expected archive confirm to close after confirmation")
 	}
 	foundArchive := false
@@ -2480,5 +2480,100 @@ func TestArchiveConfirmMarksReadAndRemovesNotificationOnSuccess(t *testing.T) {
 	}
 	if next.Focus != focusNotifications {
 		t.Fatalf("expected focus to return to notifications, got %v", next.Focus)
+	}
+}
+
+func TestArchiveConfirmCancelWithEscClosesModal(t *testing.T) {
+	state := NewState()
+	state.Focus = focusNotifications
+	state.Notifications = []notifRow{{id: "42", repo: "o/r", title: "title", ref: "o/r#1", updatedAt: time.Now().UTC()}}
+	state.rebuildNotifIndex()
+	state.SelectedNotif = "42"
+	state.NotifSelected = 0
+	state.CurrentRef = "o/r#1"
+
+	next, _ := Reduce(state, KeyEvent{Key: "a"})
+	next, effects := Reduce(next, KeyEvent{Key: "esc"})
+
+	if next.ArchiveConfirm != nil {
+		t.Fatalf("expected archive confirm to close on esc")
+	}
+	if len(effects) != 0 {
+		t.Fatalf("expected no side effects when canceling, got %d", len(effects))
+	}
+}
+
+func TestArchiveFailureKeepsNotificationAndRestoresFocus(t *testing.T) {
+	state := NewState()
+	state.Focus = focusTimeline
+	state.Notifications = []notifRow{{id: "42", repo: "o/r", title: "title", ref: "o/r#1", updatedAt: time.Now().UTC()}}
+	state.rebuildNotifIndex()
+	state.SelectedNotif = "42"
+	state.NotifSelected = 0
+	state.CurrentRef = "o/r#1"
+
+	next, _ := Reduce(state, KeyEvent{Key: "a"})
+	next, effects := Reduce(next, KeyEvent{Key: "a"})
+
+	archiveOpID := int64(0)
+	for _, eff := range effects {
+		if e, ok := eff.(ArchiveNotificationEffect); ok {
+			archiveOpID = e.OpID
+		}
+	}
+	if archiveOpID == 0 {
+		t.Fatalf("expected ArchiveNotificationEffect")
+	}
+
+	next, _ = Reduce(next, ArchiveNotificationFailedEvent{OpID: archiveOpID, Err: "boom"})
+	if len(next.Notifications) != 1 {
+		t.Fatalf("expected notification to remain on archive failure")
+	}
+	if next.Focus != focusTimeline {
+		t.Fatalf("expected focus restored to timeline, got %v", next.Focus)
+	}
+	if next.ArchiveConfirm != nil {
+		t.Fatalf("expected modal closed after failure")
+	}
+}
+
+func TestArchiveKeyWithoutTargetShowsStatus(t *testing.T) {
+	state := NewState()
+	state.Focus = focusTimeline
+	state.CurrentRef = ""
+
+	next, effects := Reduce(state, KeyEvent{Key: "a"})
+
+	if next.ArchiveConfirm != nil {
+		t.Fatalf("expected archive confirm not to open")
+	}
+	if next.Status != "nothing to archive" {
+		t.Fatalf("expected nothing-to-archive status, got %q", next.Status)
+	}
+	if len(effects) != 0 {
+		t.Fatalf("expected no side effects, got %d", len(effects))
+	}
+}
+
+func TestArchiveKeyWhileArchivePendingDoesNotOpenModal(t *testing.T) {
+	state := NewState()
+	state.Focus = focusNotifications
+	state.Notifications = []notifRow{{id: "42", repo: "o/r", title: "title", ref: "o/r#1", updatedAt: time.Now().UTC()}}
+	state.rebuildNotifIndex()
+	state.SelectedNotif = "42"
+	state.NotifSelected = 0
+	state.CurrentRef = "o/r#1"
+	state.PendingArchive[1] = pendingArchiveOp{notifID: "42", ref: "o/r#1", threadID: "42", from: focusNotifications}
+
+	next, effects := Reduce(state, KeyEvent{Key: "a"})
+
+	if next.ArchiveConfirm != nil {
+		t.Fatalf("expected archive confirm not to open when pending")
+	}
+	if next.Status != "archive already in progress" {
+		t.Fatalf("expected in-progress status, got %q", next.Status)
+	}
+	if len(effects) != 0 {
+		t.Fatalf("expected no side effects, got %d", len(effects))
 	}
 }

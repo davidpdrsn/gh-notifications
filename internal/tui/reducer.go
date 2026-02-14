@@ -253,7 +253,7 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 	case MouseClickEvent:
 		return handleMouseClick(&state, &effects, e), effects
 	case KeyEvent:
-		if state.ArchiveConfirmOpen {
+		if state.ArchiveConfirm != nil {
 			clearMotionCount(&state)
 			switch e.Key {
 			case "ctrl+c", "q":
@@ -2523,27 +2523,34 @@ func openArchiveConfirm(state *AppState) {
 		state.Status = "nothing to archive"
 		return
 	}
-	state.ArchiveConfirmOpen = true
-	state.ArchiveConfirmNotifID = target.id
-	state.ArchiveConfirmRef = target.ref
-	state.ArchiveConfirmThreadID = target.id
-	state.ArchiveConfirmFromFocus = state.Focus
+	if hasPendingArchiveForNotif(*state, target.id) {
+		state.Status = "archive already in progress"
+		return
+	}
+	state.ArchiveConfirm = &archiveConfirmState{
+		notifID:  target.id,
+		ref:      target.ref,
+		threadID: target.id,
+		from:     state.Focus,
+	}
 	state.Status = "press a again to confirm archive"
 }
 
 func closeArchiveConfirm(state *AppState) {
-	state.ArchiveConfirmOpen = false
-	state.ArchiveConfirmNotifID = ""
-	state.ArchiveConfirmRef = ""
-	state.ArchiveConfirmThreadID = ""
-	state.ArchiveConfirmFromFocus = focusNotifications
+	state.ArchiveConfirm = nil
 }
 
 func confirmArchiveNotification(state *AppState, effects *[]Effect) {
-	if !state.ArchiveConfirmOpen {
+	confirm := state.ArchiveConfirm
+	if confirm == nil {
 		return
 	}
-	n, ok := notificationByID(*state, state.ArchiveConfirmNotifID)
+	if hasPendingArchiveForNotif(*state, confirm.notifID) {
+		closeArchiveConfirm(state)
+		state.Status = "archive already in progress"
+		return
+	}
+	n, ok := notificationByID(*state, confirm.notifID)
 	if !ok {
 		closeArchiveConfirm(state)
 		state.Status = "notification no longer available"
@@ -2557,14 +2564,27 @@ func confirmArchiveNotification(state *AppState, effects *[]Effect) {
 		state.PendingArchive = make(map[int64]pendingArchiveOp)
 	}
 	state.PendingArchive[opID] = pendingArchiveOp{
-		notifID:  state.ArchiveConfirmNotifID,
-		ref:      state.ArchiveConfirmRef,
-		threadID: state.ArchiveConfirmThreadID,
-		from:     state.ArchiveConfirmFromFocus,
+		notifID:  confirm.notifID,
+		ref:      confirm.ref,
+		threadID: confirm.threadID,
+		from:     confirm.from,
 	}
-	*effects = append(*effects, ArchiveNotificationEffect{OpID: opID, ThreadID: state.ArchiveConfirmThreadID})
+	*effects = append(*effects, ArchiveNotificationEffect{OpID: opID, ThreadID: confirm.threadID})
 	closeArchiveConfirm(state)
 	state.Status = "archiving notification..."
+}
+
+func hasPendingArchiveForNotif(state AppState, notifID string) bool {
+	notifID = strings.TrimSpace(notifID)
+	if notifID == "" {
+		return false
+	}
+	for _, pending := range state.PendingArchive {
+		if pending.notifID == notifID {
+			return true
+		}
+	}
+	return false
 }
 
 func archiveTargetNotification(state AppState) (notifRow, bool) {

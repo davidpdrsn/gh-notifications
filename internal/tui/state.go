@@ -161,12 +161,7 @@ type AppState struct {
 	ReadThroughIDs              map[string]bool
 	MotionCount                 string
 	notifMarkerByRef            map[string]string
-
-	ArchiveConfirmOpen      bool
-	ArchiveConfirmNotifID   string
-	ArchiveConfirmRef       string
-	ArchiveConfirmThreadID  string
-	ArchiveConfirmFromFocus focusColumn
+	ArchiveConfirm              *archiveConfirmState
 }
 
 type pendingReadOp struct {
@@ -185,6 +180,13 @@ type pendingParentReadOp struct {
 }
 
 type pendingArchiveOp struct {
+	notifID  string
+	ref      string
+	threadID string
+	from     focusColumn
+}
+
+type archiveConfirmState struct {
 	notifID  string
 	ref      string
 	threadID string

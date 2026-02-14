@@ -153,7 +153,7 @@ func TestViewShowsArchiveConfirmationModal(t *testing.T) {
 	m := newModel(context.Background(), nil, nil)
 	m.state.Width = 80
 	m.state.Height = 20
-	m.state.ArchiveConfirmOpen = true
+	m.state.ArchiveConfirm = &archiveConfirmState{notifID: "42", ref: "o/r#1", threadID: "42", from: focusNotifications}
 
 	out := m.View()
 	if !strings.Contains(out, "Archive notification?") {
@@ -161,6 +161,38 @@ func TestViewShowsArchiveConfirmationModal(t *testing.T) {
 	}
 	if !strings.Contains(out, "Press a again to confirm.") {
 		t.Fatalf("expected archive confirmation modal instructions")
+	}
+}
+
+func TestOverlayModalCenteredPreservesBackgroundOutsideModal(t *testing.T) {
+	base := strings.Join([]string{
+		"AAAAAAAAAAAAAAAAAAAA",
+		"BBBBBBBBBBBBBBBBBBBB",
+		"CCCCCCCCCCCCCCCCCCCC",
+		"DDDDDDDDDDDDDDDDDDDD",
+		"EEEEEEEEEEEEEEEEEEEE",
+	}, "\n")
+	modal := strings.Join([]string{
+		"[modal]",
+		"confirm",
+	}, "\n")
+
+	out := overlayModalCentered(base, modal, 20, 5)
+	lines := strings.Split(out, "\n")
+	if len(lines) != 5 {
+		t.Fatalf("expected 5 lines, got %d", len(lines))
+	}
+	if lines[0] != "AAAAAAAAAAAAAAAAAAAA" {
+		t.Fatalf("expected line above modal unchanged, got %q", lines[0])
+	}
+	if !strings.HasPrefix(lines[1], "BBBBBB") || !strings.HasSuffix(lines[1], "BBBBBBB") {
+		t.Fatalf("expected modal row to preserve left/right background, got %q", lines[1])
+	}
+	if !strings.HasPrefix(lines[2], "CCCCCC") || !strings.HasSuffix(lines[2], "CCCCCCC") {
+		t.Fatalf("expected second modal row to preserve left/right background, got %q", lines[2])
+	}
+	if lines[4] != "EEEEEEEEEEEEEEEEEEEE" {
+		t.Fatalf("expected line below modal unchanged, got %q", lines[4])
 	}
 }
 
