@@ -252,6 +252,18 @@ func TestMapTimelineItem_ForcePushedPrefersNodeID(t *testing.T) {
 	}
 }
 
+func TestMapTimelineItem_UnsubscribedIsIgnored(t *testing.T) {
+	raw := []byte(`{"id":888,"event":"unsubscribed","created_at":"2024-01-02T03:08:00Z"}`)
+
+	_, w, ok := MapTimelineItem(raw)
+	if w != "" {
+		t.Fatalf("expected no warning for ignored unsubscribed event, got %q", w)
+	}
+	if ok {
+		t.Fatalf("expected unsubscribed event to be ignored")
+	}
+}
+
 func TestShouldIgnorePRTimelineEvent(t *testing.T) {
 	e := timelineEventWithName("cross-referenced")
 	if !ShouldIgnorePRTimelineEvent(e) {

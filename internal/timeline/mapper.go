@@ -36,6 +36,10 @@ var ignoredPRTimelineEvents = map[string]struct{}{
 	"auto_squash_enabled": {},
 }
 
+var ignoredTimelineEvents = map[string]struct{}{
+	"unsubscribed": {},
+}
+
 func Build(pr github.PullRequest, rawItems []github.TimelineItem) ([]timelineapi.Event, []string) {
 	return BuildWithComments(pr, rawItems, nil)
 }
@@ -112,6 +116,9 @@ func MapTimelineItem(raw json.RawMessage) (timelineapi.Event, string, bool) {
 
 	if _, ok := knownTimelineEvents[eventName]; !ok {
 		return timelineapi.Event{}, fmt.Sprintf("warning: skipping unknown timeline event type=%q id=%s occurred_at=%s", eventName, asString(obj["id"]), occurredAtString(obj)), false
+	}
+	if _, ok := ignoredTimelineEvents[eventName]; ok {
+		return timelineapi.Event{}, "", false
 	}
 
 	eventID := firstNonEmpty(asString(obj["id"]), asString(obj["node_id"]))
