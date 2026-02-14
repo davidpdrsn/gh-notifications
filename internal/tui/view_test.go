@@ -779,6 +779,16 @@ func TestResolvedPRMarkerUsesMutedStyling(t *testing.T) {
 	}
 }
 
+func TestCurrentStyleTakesPrecedenceOverMarkedStyleForNotificationRow(t *testing.T) {
+	m := newModel(context.Background(), nil, nil)
+	line := " ●  1h pr owner/repo  both current and marked"
+	out := m.renderNotificationStyledLine(line, 70, 8, 2, "pr", false, true, true)
+
+	if !strings.Contains(out, m.styles.unreadCurrent.Render(" ●  ")) {
+		t.Fatalf("expected current marker style when row is both current and marked, got %q", out)
+	}
+}
+
 func TestRenderNotificationsShowsLowercaseKindLabels(t *testing.T) {
 	m := newModel(context.Background(), nil, nil)
 	m.state.Width = 100

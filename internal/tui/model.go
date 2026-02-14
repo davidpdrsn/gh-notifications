@@ -70,6 +70,7 @@ type styles struct {
 
 func newModel(ctx context.Context, client *ghpr.Client, store *readstate.Store) *model {
 	t := catppuccinMocha
+	markedBg := lipgloss.Color("#323548")
 
 	return &model{
 		ctx:    ctx,
@@ -81,9 +82,9 @@ func newModel(ctx context.Context, client *ghpr.Client, store *readstate.Store) 
 			title:     lipgloss.NewStyle().Bold(true).Foreground(t.title),
 			text:      lipgloss.NewStyle().Foreground(t.textPrimary),
 			secondary: lipgloss.NewStyle().Foreground(t.textSecondary),
-			selected:  lipgloss.NewStyle().Background(t.selectedBg),
+			selected:  lipgloss.NewStyle().Background(markedBg),
 			selectedMuted: lipgloss.NewStyle().
-				Background(t.selectedBg).
+				Background(markedBg).
 				Foreground(t.textMuted),
 			current: lipgloss.NewStyle().
 				Background(lipgloss.Color("#3A3C4F")),
@@ -92,20 +93,20 @@ func newModel(ctx context.Context, client *ghpr.Client, store *readstate.Store) 
 				Foreground(t.textMuted),
 			muted:          lipgloss.NewStyle().Foreground(t.textMuted),
 			unreadMarker:   lipgloss.NewStyle().Foreground(t.warning),
-			unreadSelected: lipgloss.NewStyle().Foreground(t.warning).Background(t.selectedBg),
+			unreadSelected: lipgloss.NewStyle().Foreground(t.warning).Background(markedBg),
 			unreadCurrent:  lipgloss.NewStyle().Foreground(t.warning).Background(lipgloss.Color("#3A3C4F")),
 			kindPR:         lipgloss.NewStyle().Foreground(t.info),
 			kindIS:         lipgloss.NewStyle().Foreground(t.success),
 			kindUnknown:    lipgloss.NewStyle().Foreground(t.textMuted),
 			kindPRWaiting:  lipgloss.NewStyle().Foreground(t.warning).Bold(true),
-			kindPRSelected: lipgloss.NewStyle().Foreground(t.info).Background(t.selectedBg),
-			kindISSelected: lipgloss.NewStyle().Foreground(t.success).Background(t.selectedBg),
+			kindPRSelected: lipgloss.NewStyle().Foreground(t.info).Background(markedBg),
+			kindISSelected: lipgloss.NewStyle().Foreground(t.success).Background(markedBg),
 			kindUnkSelected: lipgloss.NewStyle().
 				Foreground(t.textMuted).
-				Background(t.selectedBg),
+				Background(markedBg),
 			kindPRWaitSel: lipgloss.NewStyle().
 				Foreground(t.warning).
-				Background(t.selectedBg).
+				Background(markedBg).
 				Bold(true),
 			kindPRCurrent:  lipgloss.NewStyle().Foreground(t.info).Background(lipgloss.Color("#3A3C4F")),
 			kindISCurrent:  lipgloss.NewStyle().Foreground(t.success).Background(lipgloss.Color("#3A3C4F")),
