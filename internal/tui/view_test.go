@@ -471,6 +471,16 @@ func TestNotificationTimePrefixesAlignAcrossRows(t *testing.T) {
 	}
 }
 
+func TestTimeAgoFormatsYearsAndDays(t *testing.T) {
+	now := time.Now().UTC()
+	then := now.Add(-726 * 24 * time.Hour)
+
+	got := timeAgo(then)
+	if got != "1y 361d" {
+		t.Fatalf("expected 1y 361d, got %q", got)
+	}
+}
+
 func TestRenderNotificationTimestampStylesPrefix(t *testing.T) {
 	m := newModel(context.Background(), nil, nil)
 	line := "2h owner/repo  title"
@@ -666,17 +676,20 @@ func TestWrapThreadRowUsesHangingIndentForReplies(t *testing.T) {
 		label:    "KaffeDiem  This triggers a FB write every time",
 		event: &ghpr.TimelineEvent{
 			Type:       "github.review_comment",
-			OccurredAt: time.Now().UTC(),
+			OccurredAt: time.Now().UTC().Add(-2 * time.Hour),
 			Actor:      &ghpr.Actor{Login: "KaffeDiem"},
 			Comment:    &ghpr.CommentContext{Body: ptrBody("This triggers a FB write every time")},
 		},
 	}
 
-	lines := wrapThreadRow(row, ts, 38, 10)
+	lines := wrapThreadRow(row, ts, 38, 3, 10)
 	if len(lines) < 2 {
 		t.Fatalf("expected wrapped child lines, got %v", lines)
 	}
-	expectedIndent := strings.Repeat(" ", 9+2)
+	if !strings.Contains(lines[0], "2h") {
+		t.Fatalf("expected thread row to include timestamp, got %q", lines[0])
+	}
+	expectedIndent := strings.Repeat(" ", 3+2+10+2)
 	if !strings.HasPrefix(lines[1], expectedIndent) {
 		t.Fatalf("expected continuation line to align under message column, got %q", lines[1])
 	}
@@ -832,7 +845,7 @@ func TestWrapThreadRowDoesNotUseTreeRail(t *testing.T) {
 		},
 	}
 
-	lines := wrapThreadRow(row, ts, 38, 10)
+	lines := wrapThreadRow(row, ts, 38, 3, 10)
 	if len(lines) < 2 {
 		t.Fatalf("expected wrapped child lines, got %v", lines)
 	}

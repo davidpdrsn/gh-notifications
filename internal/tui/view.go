@@ -556,13 +556,13 @@ func (m *model) renderTimeline(width, height int) string {
 				wrapped := row.lines
 				style := m.styleForTimelineRow(ts, rows[row.index])
 				for _, seg := range wrapped {
-					lines = append(lines, m.renderTimelineStyledLine(style, seg, plan.avail, current, marked, leadWidth, isRead))
+					lines = append(lines, m.renderTimelineStyledLine(style, seg, plan.avail, current, marked, leadWidth, timeWidth, isRead))
 					rowIndexByLine = append(rowIndexByLine, row.index)
 				}
 			} else {
 				style := m.styleForTimelineRow(ts, rows[row.index])
 				for _, seg := range row.lines {
-					lines = append(lines, m.renderTimelineStyledLine(style, seg, plan.avail, false, false, leadWidth, isRead))
+					lines = append(lines, m.renderTimelineStyledLine(style, seg, plan.avail, false, false, leadWidth, timeWidth, isRead))
 					rowIndexByLine = append(rowIndexByLine, row.index)
 				}
 			}
@@ -604,6 +604,7 @@ func (m *model) renderThread(width, height int) string {
 			if avail < 1 {
 				avail = 1
 			}
+			timeWidth := timelineTimeColumnWidth(rows)
 			actorWidth := timelineActorColumnWidth(rows)
 			start := ts.threadScrollOffset
 			if start < 0 {
@@ -613,7 +614,7 @@ func (m *model) renderThread(width, height int) string {
 				start = len(rows) - 1
 			}
 			for i := start; i < len(rows); i++ {
-				wrapped := wrapThreadRow(rows[i], ts, avail, actorWidth)
+				wrapped := wrapThreadRow(rows[i], ts, avail, timeWidth, actorWidth)
 				isRead := ts.rowRead(rows[i])
 				if i == ts.threadSelectedIndex {
 					selectedRow = i
@@ -623,13 +624,13 @@ func (m *model) renderThread(width, height int) string {
 				if current || marked {
 					style := m.styleForTimelineRow(ts, rows[i])
 					for _, seg := range wrapped {
-						lines = append(lines, m.renderTimelineStyledLine(style, seg, avail, current, marked, 0, isRead))
+						lines = append(lines, m.renderTimelineStyledLine(style, seg, avail, current, marked, timeWidth, timeWidth, isRead))
 						rowIndexByLine = append(rowIndexByLine, i)
 					}
 				} else {
 					style := m.styleForTimelineRow(ts, rows[i])
 					for _, seg := range wrapped {
-						lines = append(lines, m.renderTimelineStyledLine(style, seg, avail, false, false, 0, isRead))
+						lines = append(lines, m.renderTimelineStyledLine(style, seg, avail, false, false, timeWidth, timeWidth, isRead))
 						rowIndexByLine = append(rowIndexByLine, i)
 					}
 				}
@@ -694,14 +695,44 @@ func (m *model) styleForTimelineRow(ts *timelineState, row displayTimelineRow) l
 	}
 }
 
-func (m *model) renderTimelineStyledLine(base lipgloss.Style, line string, width int, current bool, marked bool, kindWidth int, read bool) string {
+func (m *model) renderTimelineStyledLine(base lipgloss.Style, line string, width int, current bool, marked bool, kindWidth int, timeWidth int, read bool) string {
 	if width < 1 {
 		width = 1
 	}
 	padded := padToDisplayWidth(line, width)
+	renderTimestamp := func(s string) string {
+		if marked {
+			return m.styles.selectedMuted.Render(s)
+		}
+		if current {
+			return m.styles.currentMuted.Render(s)
+		}
+		return m.styles.muted.Render(s)
+	}
 	renderRest := func(rest string) string {
 		if kindWidth > 0 {
 			kindCol, tail := splitAtExactDisplayWidth(rest, kindWidth)
+			if timeWidth > 0 {
+				tsPart, restLead := splitAtExactDisplayWidth(kindCol, timeWidth)
+				tsSep, restLeadTail := splitAtExactDisplayWidth(restLead, 2)
+				body := restLeadTail + tail
+				if marked {
+					if read {
+						return renderTimestamp(tsPart) + m.styles.selectedMuted.Render(tsSep) + m.styles.selectedMuted.Render(body)
+					}
+					return renderTimestamp(tsPart) + m.styles.selectedMuted.Render(tsSep) + m.styles.selected.Render(base.Render(body))
+				}
+				if current {
+					if read {
+						return renderTimestamp(tsPart) + m.styles.currentMuted.Render(tsSep) + m.styles.currentMuted.Render(body)
+					}
+					return renderTimestamp(tsPart) + m.styles.currentMuted.Render(tsSep) + m.styles.current.Render(base.Render(body))
+				}
+				if read {
+					return renderTimestamp(tsPart) + m.styles.muted.Render(tsSep) + m.styles.muted.Render(body)
+				}
+				return renderTimestamp(tsPart) + m.styles.muted.Render(tsSep) + base.Render(body)
+			}
 			if marked {
 				if read {
 					return m.styles.selected.Render(base.Render(kindCol)) + m.styles.selectedMuted.Render(tail)
@@ -1332,23 +1363,27 @@ func formatThreadChildColumns(actorWidth int, actor, message string) (string, in
 	return actor + "  " + message, lipgloss.Width(actor) + 2
 }
 
-func wrapThreadRow(row displayTimelineRow, ts *timelineState, maxWidth int, actorWidth int) []string {
+func wrapThreadRow(row displayTimelineRow, ts *timelineState, maxWidth int, timeWidth int, actorWidth int) []string {
+	when := "?"
 	actor := ""
 	message := ""
 	if row.event != nil {
+		when = timeAgo(row.event.OccurredAt)
 		actor = eventActorLabel(*row.event)
 		message = truncatePreview(eventPreviewText(*row.event), 96)
 	}
+	timeCol := padToDisplayWidth(when, max(1, timeWidth))
 	content, messageOffset := formatThreadChildColumns(actorWidth, actor, message)
+	lead := timeCol + "  "
 	prefix := " ●  "
 	if ts != nil {
 		prefix = ts.rowUnreadMarker(row)
 	}
-	indent := ""
+	indent := strings.Repeat(" ", lipgloss.Width(lead))
 	if messageOffset > 0 {
 		indent += strings.Repeat(" ", messageOffset)
 	}
-	return wrapDisplayWidth(prefix+content, maxWidth, indent)
+	return wrapDisplayWidth(prefix+lead+content, maxWidth, indent)
 }
 
 type paneContent int
@@ -1461,7 +1496,13 @@ func timeAgo(t time.Time) string {
 	if d < 24*time.Hour {
 		return fmt.Sprintf("%dh", int(d.Hours()))
 	}
-	return fmt.Sprintf("%dd", int(d.Hours()/24))
+	days := int(d.Hours() / 24)
+	if days >= 365 {
+		years := days / 365
+		remainingDays := days % 365
+		return fmt.Sprintf("%dy %dd", years, remainingDays)
+	}
+	return fmt.Sprintf("%dd", days)
 }
 
 func (m *model) String() string {

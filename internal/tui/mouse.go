@@ -153,6 +153,7 @@ func threadRowAtY(state AppState, y, width int) int {
 	if avail < 1 {
 		avail = 1
 	}
+	timeWidth := timelineTimeColumnWidth(rows)
 	actorWidth := timelineActorColumnWidth(rows)
 	line := y
 	start := ts.threadScrollOffset
@@ -163,7 +164,7 @@ func threadRowAtY(state AppState, y, width int) int {
 		start = len(rows) - 1
 	}
 	for i := start; i < len(rows); i++ {
-		h := len(wrapThreadRow(rows[i], ts, avail, actorWidth))
+		h := len(wrapThreadRow(rows[i], ts, avail, timeWidth, actorWidth))
 		if h < 1 {
 			h = 1
 		}

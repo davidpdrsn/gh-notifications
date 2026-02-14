@@ -1676,13 +1676,14 @@ func scrollThreadByWrappedLines(state *AppState, delta int) {
 	if avail < 1 {
 		avail = 1
 	}
+	timeWidth := timelineTimeColumnWidth(rows)
 	actorWidth := timelineActorColumnWidth(rows)
 
 	height := func(i int) int {
 		if i < 0 || i >= len(rows) {
 			return 1
 		}
-		h := len(wrapThreadRow(rows[i], ts, avail, actorWidth))
+		h := len(wrapThreadRow(rows[i], ts, avail, timeWidth, actorWidth))
 		if h < 1 {
 			return 1
 		}
@@ -2309,11 +2310,12 @@ func ensureThreadSelectionVisible(state *AppState, ts *timelineState) {
 		avail = 1
 	}
 	actorWidth := timelineActorColumnWidth(rows)
+	timeWidth := timelineTimeColumnWidth(rows)
 	ts.threadScrollOffset = clampWrappedScroll(ts.threadScrollOffset, ts.threadSelectedIndex, len(rows), viewport, func(i int) int {
 		if i < 0 || i >= len(rows) {
 			return 1
 		}
-		return len(wrapThreadRow(rows[i], ts, avail, actorWidth))
+		return len(wrapThreadRow(rows[i], ts, avail, timeWidth, actorWidth))
 	})
 }
 
