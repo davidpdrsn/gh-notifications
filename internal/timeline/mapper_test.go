@@ -276,6 +276,42 @@ func TestMapTimelineItem_UnsubscribedIsIgnored(t *testing.T) {
 	}
 }
 
+func TestMapTimelineItem_SubscribedIsIgnored(t *testing.T) {
+	raw := []byte(`{"id":889,"event":"subscribed","created_at":"2024-01-02T03:08:30Z"}`)
+
+	_, w, ok := MapTimelineItem(raw)
+	if w != "" {
+		t.Fatalf("expected no warning for ignored subscribed event, got %q", w)
+	}
+	if ok {
+		t.Fatalf("expected subscribed event to be ignored")
+	}
+}
+
+func TestMapTimelineItem_MentionedIsIgnored(t *testing.T) {
+	raw := []byte(`{"id":890,"event":"mentioned","created_at":"2024-01-02T03:08:40Z"}`)
+
+	_, w, ok := MapTimelineItem(raw)
+	if w != "" {
+		t.Fatalf("expected no warning for ignored mentioned event, got %q", w)
+	}
+	if ok {
+		t.Fatalf("expected mentioned event to be ignored")
+	}
+}
+
+func TestMapTimelineItem_LabeledIsIgnored(t *testing.T) {
+	raw := []byte(`{"id":891,"event":"labeled","created_at":"2024-01-02T03:08:50Z"}`)
+
+	_, w, ok := MapTimelineItem(raw)
+	if w != "" {
+		t.Fatalf("expected no warning for ignored labeled event, got %q", w)
+	}
+	if ok {
+		t.Fatalf("expected labeled event to be ignored")
+	}
+}
+
 func TestShouldIgnorePRTimelineEvent(t *testing.T) {
 	e := timelineEventWithName("cross-referenced")
 	if !ShouldIgnorePRTimelineEvent(e) {

@@ -37,6 +37,9 @@ var ignoredPRTimelineEvents = map[string]struct{}{
 }
 
 var ignoredTimelineEvents = map[string]struct{}{
+	"subscribed":       {},
+	"mentioned":        {},
+	"labeled":          {},
 	"unsubscribed":     {},
 	"cross-referenced": {},
 }
