@@ -22,11 +22,13 @@ type User struct {
 }
 
 type PullRequest struct {
-	Number    int       `json:"number"`
-	Title     string    `json:"title"`
-	Body      string    `json:"body"`
-	CreatedAt time.Time `json:"created_at"`
-	User      User      `json:"user"`
+	Number    int        `json:"number"`
+	Title     string     `json:"title"`
+	Body      string     `json:"body"`
+	CreatedAt time.Time  `json:"created_at"`
+	State     string     `json:"state"`
+	MergedAt  *time.Time `json:"merged_at"`
+	User      User       `json:"user"`
 }
 
 type IssuePullRequest struct {
@@ -61,6 +63,10 @@ type Notification struct {
 	UpdatedAt  time.Time              `json:"updated_at"`
 	Repository NotificationRepository `json:"repository"`
 	Subject    NotificationSubject    `json:"subject"`
+}
+
+type RequestedReviewers struct {
+	Users []User `json:"users"`
 }
 
 type ReviewComment struct {
@@ -305,6 +311,23 @@ func (c *Client) ArchiveNotificationThread(ctx context.Context, threadID string)
 	}
 
 	return nil
+}
+
+func (c *Client) FetchViewer(ctx context.Context) (User, error) {
+	var user User
+	if err := c.getJSON(ctx, "/user", &user); err != nil {
+		return User{}, err
+	}
+	return user, nil
+}
+
+func (c *Client) FetchRequestedReviewers(ctx context.Context, owner, repo string, number int) (RequestedReviewers, error) {
+	var out RequestedReviewers
+	path := fmt.Sprintf("/repos/%s/%s/pulls/%d/requested_reviewers", url.PathEscape(owner), url.PathEscape(repo), number)
+	if err := c.getJSON(ctx, path, &out); err != nil {
+		return RequestedReviewers{}, err
+	}
+	return out, nil
 }
 
 func (c *Client) getJSON(ctx context.Context, path string, out any) error {

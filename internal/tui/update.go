@@ -86,6 +86,26 @@ type parentReadStatePersistErrMsg struct {
 	err  error
 }
 
+type viewerLoadedMsg struct {
+	login string
+}
+
+type viewerLoadErrMsg struct {
+	err error
+}
+
+type reviewReqStateLoadedMsg struct {
+	refs        []string
+	pendingRefs []string
+	mergedRefs  []string
+	closedRefs  []string
+}
+
+type reviewReqStateLoadErrMsg struct {
+	refs []string
+	err  error
+}
+
 type archiveNotificationSucceededMsg struct {
 	opID int64
 }
@@ -200,6 +220,18 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case parentReadStatePersistErrMsg:
 		asyncMsg = true
 		events = append(events, ParentReadStatePersistFailedEvent{OpID: t.opID, Err: t.err.Error()})
+	case viewerLoadedMsg:
+		asyncMsg = true
+		events = append(events, ViewerLoadedEvent{Login: t.login})
+	case viewerLoadErrMsg:
+		asyncMsg = true
+		events = append(events, ViewerLoadFailedEvent{Err: t.err.Error()})
+	case reviewReqStateLoadedMsg:
+		asyncMsg = true
+		events = append(events, ReviewReqStateLoadedEvent{Refs: t.refs, PendingRefs: t.pendingRefs, MergedRefs: t.mergedRefs, ClosedRefs: t.closedRefs})
+	case reviewReqStateLoadErrMsg:
+		asyncMsg = true
+		events = append(events, ReviewReqStateLoadFailedEvent{Refs: t.refs, Err: t.err.Error()})
 	case archiveNotificationSucceededMsg:
 		asyncMsg = true
 		events = append(events, ArchiveNotificationSucceededEvent{OpID: t.opID})
@@ -295,6 +327,10 @@ func (m *model) applyEffects(effects []Effect) {
 			m.startParentReadStateLoader(e.Refs)
 		case PersistParentReadStateEffect:
 			m.startParentReadStatePersist(e.OpID, e.Ref, e.Read)
+		case LoadViewerEffect:
+			m.startViewerLoader()
+		case LoadReviewReqStateEffect:
+			m.startReviewReqStateLoader(e.Refs)
 		case ArchiveNotificationEffect:
 			m.startArchiveNotification(e.OpID, e.ThreadID, e.UpdatedAt)
 		case ScheduleAutoRefreshTickEffect:
@@ -410,6 +446,59 @@ func (m *model) startParentReadStatePersist(opID int64, ref string, read bool) {
 			return
 		}
 		m.msgCh <- parentReadStatePersistedMsg{opID: opID}
+	}()
+}
+
+func (m *model) startViewerLoader() {
+	go func() {
+		if m.client == nil {
+			m.msgCh <- viewerLoadErrMsg{err: errors.New("client unavailable")}
+			return
+		}
+		login, err := m.client.FetchViewerLogin(m.ctx)
+		if err != nil {
+			m.msgCh <- viewerLoadErrMsg{err: err}
+			return
+		}
+		m.msgCh <- viewerLoadedMsg{login: login}
+	}()
+}
+
+func (m *model) startReviewReqStateLoader(refs []string) {
+	go func() {
+		if m.client == nil {
+			m.msgCh <- reviewReqStateLoadErrMsg{refs: refs, err: errors.New("client unavailable")}
+			return
+		}
+		viewer := strings.TrimSpace(m.state.ViewerLogin)
+		if viewer == "" {
+			m.msgCh <- reviewReqStateLoadErrMsg{refs: refs, err: errors.New("viewer unavailable")}
+			return
+		}
+		pending := make([]string, 0, len(refs))
+		merged := make([]string, 0, len(refs))
+		closed := make([]string, 0, len(refs))
+		for _, ref := range refs {
+			ref = strings.TrimSpace(ref)
+			if ref == "" {
+				continue
+			}
+			status, err := m.client.ReviewRequestStatusForViewer(m.ctx, ref, viewer)
+			if err != nil {
+				m.msgCh <- reviewReqStateLoadErrMsg{refs: refs, err: err}
+				return
+			}
+			if status.Pending {
+				pending = append(pending, ref)
+			}
+			if status.Merged {
+				merged = append(merged, ref)
+			}
+			if status.Closed {
+				closed = append(closed, ref)
+			}
+		}
+		m.msgCh <- reviewReqStateLoadedMsg{refs: refs, pendingRefs: pending, mergedRefs: merged, closedRefs: closed}
 	}()
 }
 

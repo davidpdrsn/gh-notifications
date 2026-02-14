@@ -731,7 +731,7 @@ func TestSelectedUnreadTimelineRowKeepsSelectionBackgroundOnMarker(t *testing.T)
 func TestSelectedUnreadNotificationRowKeepsMarkerAndSelectedTimestampStyling(t *testing.T) {
 	m := newModel(context.Background(), nil, nil)
 	line := " ●  1h owner/repo  Add support for marker styling"
-	out := m.renderNotificationStyledLine(line, 70, 8, 2, false, true)
+	out := m.renderNotificationStyledLine(line, 70, 8, 2, "pr", false, false, true)
 
 	if !strings.Contains(out, m.styles.unreadSelected.Render(" ●  ")) {
 		t.Fatalf("expected selected unread marker style, got %q", out)
@@ -752,7 +752,7 @@ func TestSelectedUnreadNotificationRowKeepsMarkerAndSelectedTimestampStyling(t *
 func TestSelectedPartialNotificationRowKeepsMarkerStyling(t *testing.T) {
 	m := newModel(context.Background(), nil, nil)
 	line := " ◐  1h owner/repo  Partial read state"
-	out := m.renderNotificationStyledLine(line, 70, 8, 2, false, true)
+	out := m.renderNotificationStyledLine(line, 70, 8, 2, "pr", false, false, true)
 
 	if !strings.Contains(out, m.styles.unreadSelected.Render(" ◐  ")) {
 		t.Fatalf("expected selected partial marker style, got %q", out)
@@ -762,10 +762,20 @@ func TestSelectedPartialNotificationRowKeepsMarkerStyling(t *testing.T) {
 func TestCurrentNotificationRowUsesCurrentBackgroundStyling(t *testing.T) {
 	m := newModel(context.Background(), nil, nil)
 	line := " ●  1h owner/repo  Current row"
-	out := m.renderNotificationStyledLine(line, 70, 8, 2, true, false)
+	out := m.renderNotificationStyledLine(line, 70, 8, 2, "pr", false, true, false)
 
 	if !strings.Contains(out, m.styles.unreadCurrent.Render(" ●  ")) {
 		t.Fatalf("expected current unread marker style, got %q", out)
+	}
+}
+
+func TestResolvedPRMarkerUsesMutedStyling(t *testing.T) {
+	m := newModel(context.Background(), nil, nil)
+	line := " +  1h pr owner/repo  merged"
+	out := m.renderNotificationStyledLine(line, 70, 8, 2, "pr", false, false, false)
+
+	if !strings.Contains(out, m.styles.muted.Render(" +  ")) {
+		t.Fatalf("expected resolved marker to use muted style, got %q", out)
 	}
 }
 
@@ -788,6 +798,50 @@ func TestRenderNotificationsShowsLowercaseKindLabels(t *testing.T) {
 	}
 	if !strings.Contains(out, "is") {
 		t.Fatalf("expected is kind label in notifications output")
+	}
+}
+
+func TestRenderNotificationsHighlightsWaitingOnMyReviewPR(t *testing.T) {
+	m := newModel(context.Background(), nil, nil)
+	m.state.Width = 100
+	m.state.Height = 20
+	m.state.Notifications = []notifRow{{
+		id:        "n1",
+		repo:      "owner/repo",
+		kind:      "pr",
+		ref:       "owner/repo#1",
+		title:     "review me",
+		updatedAt: time.Now().UTC(),
+	}}
+	m.state.rebuildNotifIndex()
+	m.state.SelectedNotif = "n1"
+	m.state.NotifSelected = 0
+	m.state.ReviewReqByRef["owner/repo#1"] = true
+
+	leftW, _, _ := paneWidths(panesTotalWidth(m.state.Width, m.state.Focus, m.state.currentPaneMode()), m.state.Focus, m.state.currentPaneMode())
+	out := m.renderNotifications(leftW, paneInnerHeight(m.state))
+	if !strings.Contains(out, m.styles.kindPRWaitCur.Render("pr")) {
+		t.Fatalf("expected waiting-on-my-review pr kind style in output")
+	}
+}
+
+func TestSplitUnreadMarkerPrefixSupportsWaitingMarker(t *testing.T) {
+	marker, rest, ok := splitUnreadMarkerPrefix(" !  1h pr owner/repo  title")
+	if !ok {
+		t.Fatalf("expected waiting marker prefix to be recognized")
+	}
+	if marker != " !  " {
+		t.Fatalf("unexpected marker: %q", marker)
+	}
+	if rest != "1h pr owner/repo  title" {
+		t.Fatalf("unexpected rest: %q", rest)
+	}
+}
+
+func TestSplitUnreadMarkerPrefixSupportsMergedMarker(t *testing.T) {
+	marker, rest, ok := splitUnreadMarkerPrefix(" +  1h pr owner/repo  title")
+	if !ok || marker != " +  " || rest != "1h pr owner/repo  title" {
+		t.Fatalf("unexpected merged marker parse: ok=%v marker=%q rest=%q", ok, marker, rest)
 	}
 }
 

@@ -248,6 +248,7 @@ func (m *model) renderNotifications(width, height int) string {
 	for i := start; i < end; i++ {
 		n := visible[i]
 		marker := m.state.notificationUnreadMarker(n)
+		waitingOnMe := strings.TrimSpace(n.kind) == "pr" && m.state.ReviewReqByRef[n.ref]
 		prefix := marker + padToDisplayWidth(timeAgo(n.updatedAt), timeColWidth) + " "
 		kind := padToDisplayWidth(notificationKindLabel(n.kind), kindColWidth)
 		repo := padToDisplayWidth(clampDisplayWidth(oneLine(n.repo), repoColWidth), repoColWidth)
@@ -274,12 +275,12 @@ func (m *model) renderNotifications(width, height int) string {
 		}
 		if current || marked {
 			for _, seg := range wrapped {
-				lines = append(lines, m.renderNotificationStyledLine(seg, avail, timeColWidth+5, kindColWidth, current, marked))
+				lines = append(lines, m.renderNotificationStyledLine(seg, avail, timeColWidth+5, kindColWidth, n.kind, waitingOnMe, current, marked))
 				rowIndexByLine = append(rowIndexByLine, i)
 			}
 		} else {
 			for _, seg := range wrapped {
-				lines = append(lines, m.renderNotificationStyledLine(seg, avail, timeColWidth+5, kindColWidth, false, false))
+				lines = append(lines, m.renderNotificationStyledLine(seg, avail, timeColWidth+5, kindColWidth, n.kind, waitingOnMe, false, false))
 				rowIndexByLine = append(rowIndexByLine, i)
 			}
 		}
@@ -425,7 +426,7 @@ func renderNotificationTimestamp(line string, width int, style lipgloss.Style) s
 	return style.Render(prefix) + rest
 }
 
-func (m *model) renderNotificationStyledLine(line string, width int, timeWidth int, kindWidth int, current bool, marked bool) string {
+func (m *model) renderNotificationStyledLine(line string, width int, timeWidth int, kindWidth int, kind string, waitingOnMe bool, current bool, marked bool) string {
 	if width < 1 {
 		width = 1
 	}
@@ -443,7 +444,7 @@ func (m *model) renderNotificationStyledLine(line string, width int, timeWidth i
 		}
 		kindCol, tail := splitAtExactDisplayWidth(content, kindWidth)
 		sep, body := splitAtExactDisplayWidth(tail, 1)
-		kindStyle := m.kindStyle(kindCol, current, marked)
+		kindStyle := m.kindStyle(kindCol, waitingOnMe, current, marked)
 		kindRendered := kindStyle.Render(kindCol)
 		if marked {
 			return kindRendered + m.styles.selected.Render(sep+body)
@@ -456,7 +457,7 @@ func (m *model) renderNotificationStyledLine(line string, width int, timeWidth i
 
 	if marked {
 		if marker, remainder, ok := splitUnreadMarkerPrefix(prefix); ok {
-			return m.styles.unreadSelected.Render(marker) +
+			return m.notificationMarkerStyle(marker, current, marked).Render(marker) +
 				m.styles.selectedMuted.Render(remainder) +
 				renderRest(rest)
 		}
@@ -464,7 +465,7 @@ func (m *model) renderNotificationStyledLine(line string, width int, timeWidth i
 	}
 	if current {
 		if marker, remainder, ok := splitUnreadMarkerPrefix(prefix); ok {
-			return m.styles.unreadCurrent.Render(marker) +
+			return m.notificationMarkerStyle(marker, current, marked).Render(marker) +
 				m.styles.currentMuted.Render(remainder) +
 				renderRest(rest)
 		}
@@ -472,13 +473,41 @@ func (m *model) renderNotificationStyledLine(line string, width int, timeWidth i
 	}
 
 	if marker, remainder, ok := splitUnreadMarkerPrefix(prefix); ok {
-		return m.styles.unreadMarker.Render(marker) + m.styles.muted.Render(remainder) + renderRest(rest)
+		return m.notificationMarkerStyle(marker, current, marked).Render(marker) + m.styles.muted.Render(remainder) + renderRest(rest)
 	}
 	return m.styles.muted.Render(prefix) + renderRest(rest)
 }
 
-func (m *model) kindStyle(kind string, current bool, marked bool) lipgloss.Style {
+func (m *model) notificationMarkerStyle(marker string, current bool, marked bool) lipgloss.Style {
+	if strings.Contains(marker, "+") {
+		if marked {
+			return m.styles.selectedMuted
+		}
+		if current {
+			return m.styles.currentMuted
+		}
+		return m.styles.muted
+	}
+	if marked {
+		return m.styles.unreadSelected
+	}
+	if current {
+		return m.styles.unreadCurrent
+	}
+	return m.styles.unreadMarker
+}
+
+func (m *model) kindStyle(kind string, waitingOnMe bool, current bool, marked bool) lipgloss.Style {
 	normalized := strings.TrimSpace(strings.ToLower(kind))
+	if waitingOnMe && normalized == "pr" {
+		if marked {
+			return m.styles.kindPRWaitSel
+		}
+		if current {
+			return m.styles.kindPRWaitCur
+		}
+		return m.styles.kindPRWaiting
+	}
 	if marked {
 		switch normalized {
 		case "pr":
@@ -1179,7 +1208,7 @@ func splitAtExactDisplayWidth(s string, maxWidth int) (string, string) {
 }
 
 func splitUnreadMarkerPrefix(s string) (string, string, bool) {
-	for _, marker := range []string{" ●  ", " ◐  ", "● ", "◐ "} {
+	for _, marker := range []string{" !  ", " +  ", " ●  ", " ◐  ", "! ", "+ ", "● ", "◐ "} {
 		if strings.HasPrefix(s, marker) {
 			return marker, strings.TrimPrefix(s, marker), true
 		}

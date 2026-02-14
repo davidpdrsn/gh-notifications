@@ -166,6 +166,13 @@ type AppState struct {
 	MarkedNotifications         map[string]bool
 	MarkedTimelineByRef         map[string]map[string]bool
 	MarkedThreadByRef           map[string]map[string]bool
+	ViewerLogin                 string
+	ViewerLoaded                bool
+	ReviewReqByRef              map[string]bool
+	ReviewReqMergedByRef        map[string]bool
+	ReviewReqClosedByRef        map[string]bool
+	ReviewReqLoadedByRef        map[string]bool
+	ReviewReqLoadInFlightByRef  map[string]bool
 }
 
 type pendingReadOp struct {
@@ -220,6 +227,11 @@ func NewState() AppState {
 		MarkedNotifications:         make(map[string]bool),
 		MarkedTimelineByRef:         make(map[string]map[string]bool),
 		MarkedThreadByRef:           make(map[string]map[string]bool),
+		ReviewReqByRef:              make(map[string]bool),
+		ReviewReqMergedByRef:        make(map[string]bool),
+		ReviewReqClosedByRef:        make(map[string]bool),
+		ReviewReqLoadedByRef:        make(map[string]bool),
+		ReviewReqLoadInFlightByRef:  make(map[string]bool),
 	}
 }
 
@@ -775,6 +787,20 @@ func (s *AppState) notificationUnreadMarker(n notifRow) string {
 	ts := s.TimelineByRef[n.ref]
 	if s.notifMarkerByRef == nil {
 		s.notifMarkerByRef = make(map[string]string)
+	}
+	if strings.TrimSpace(n.kind) == "pr" {
+		if s.ReviewReqByRef[n.ref] {
+			s.notifMarkerByRef[n.ref] = " !  "
+			return " !  "
+		}
+		if s.ReviewReqMergedByRef[n.ref] {
+			s.notifMarkerByRef[n.ref] = " +  "
+			return " +  "
+		}
+		if s.ReviewReqClosedByRef[n.ref] {
+			s.notifMarkerByRef[n.ref] = " +  "
+			return " +  "
+		}
 	}
 	known, read := s.notificationReadState(n)
 	if known {

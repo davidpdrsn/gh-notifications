@@ -79,3 +79,9 @@ type NotificationEvent struct {
 	Subject    NotificationSubject    `json:"subject"`
 	Target     NotificationTarget     `json:"target"`
 }
+
+type ReviewRequestStatus struct {
+	Pending bool
+	Merged  bool
+	Closed  bool
+}

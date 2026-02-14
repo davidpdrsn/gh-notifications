@@ -41,12 +41,15 @@ type styles struct {
 	kindPR          lipgloss.Style
 	kindIS          lipgloss.Style
 	kindUnknown     lipgloss.Style
+	kindPRWaiting   lipgloss.Style
 	kindPRSelected  lipgloss.Style
 	kindISSelected  lipgloss.Style
 	kindUnkSelected lipgloss.Style
+	kindPRWaitSel   lipgloss.Style
 	kindPRCurrent   lipgloss.Style
 	kindISCurrent   lipgloss.Style
 	kindUnkCurrent  lipgloss.Style
+	kindPRWaitCur   lipgloss.Style
 	error           lipgloss.Style
 	status          lipgloss.Style
 	tab             lipgloss.Style
@@ -94,14 +97,20 @@ func newModel(ctx context.Context, client *ghpr.Client, store *readstate.Store) 
 			kindPR:         lipgloss.NewStyle().Foreground(t.info),
 			kindIS:         lipgloss.NewStyle().Foreground(t.success),
 			kindUnknown:    lipgloss.NewStyle().Foreground(t.textMuted),
+			kindPRWaiting:  lipgloss.NewStyle().Foreground(t.warning).Bold(true),
 			kindPRSelected: lipgloss.NewStyle().Foreground(t.info).Background(t.selectedBg),
 			kindISSelected: lipgloss.NewStyle().Foreground(t.success).Background(t.selectedBg),
 			kindUnkSelected: lipgloss.NewStyle().
 				Foreground(t.textMuted).
 				Background(t.selectedBg),
+			kindPRWaitSel: lipgloss.NewStyle().
+				Foreground(t.warning).
+				Background(t.selectedBg).
+				Bold(true),
 			kindPRCurrent:  lipgloss.NewStyle().Foreground(t.info).Background(lipgloss.Color("#3A3C4F")),
 			kindISCurrent:  lipgloss.NewStyle().Foreground(t.success).Background(lipgloss.Color("#3A3C4F")),
 			kindUnkCurrent: lipgloss.NewStyle().Foreground(t.textMuted).Background(lipgloss.Color("#3A3C4F")),
+			kindPRWaitCur:  lipgloss.NewStyle().Foreground(t.warning).Background(lipgloss.Color("#3A3C4F")).Bold(true),
 			error:          lipgloss.NewStyle().Foreground(t.danger),
 			status: lipgloss.NewStyle().
 				Foreground(t.statusFg).

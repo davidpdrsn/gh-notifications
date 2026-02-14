@@ -2,6 +2,7 @@ package ghpr
 
 import (
 	"context"
+	"strings"
 
 	"gh-pr/internal/github"
 	"gh-pr/internal/notifications"
@@ -132,6 +133,45 @@ func (c *Client) FetchForcePushInterdiff(ctx context.Context, ref string, eventI
 
 func (c *Client) ArchiveNotificationThread(ctx context.Context, threadID string) error {
 	return c.github.ArchiveNotificationThread(ctx, threadID)
+}
+
+func (c *Client) FetchViewerLogin(ctx context.Context) (string, error) {
+	viewer, err := c.github.FetchViewer(ctx)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(viewer.Login), nil
+}
+
+func (c *Client) ReviewRequestStatusForViewer(ctx context.Context, ref string, viewerLogin string) (ReviewRequestStatus, error) {
+	viewerLogin = strings.TrimSpace(viewerLogin)
+	if viewerLogin == "" {
+		return ReviewRequestStatus{}, nil
+	}
+	parsed, err := ParseTimelineRef(ref)
+	if err != nil {
+		return ReviewRequestStatus{}, err
+	}
+	pr, err := c.github.FetchPullRequest(ctx, parsed.Owner, parsed.Repo, parsed.Number)
+	if err != nil {
+		return ReviewRequestStatus{}, err
+	}
+	if pr.MergedAt != nil {
+		return ReviewRequestStatus{Merged: true}, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(pr.State), "open") {
+		return ReviewRequestStatus{Closed: true}, nil
+	}
+	requested, err := c.github.FetchRequestedReviewers(ctx, parsed.Owner, parsed.Repo, parsed.Number)
+	if err != nil {
+		return ReviewRequestStatus{}, err
+	}
+	for _, u := range requested.Users {
+		if strings.EqualFold(strings.TrimSpace(u.Login), viewerLogin) {
+			return ReviewRequestStatus{Pending: true}, nil
+		}
+	}
+	return ReviewRequestStatus{}, nil
 }
 
 func (c *Client) streamPRTimeline(ctx context.Context, owner, repo string, number int, emit func(timelineapi.Event) error, onWarning func(string)) error {

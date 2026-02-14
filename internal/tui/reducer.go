@@ -78,6 +78,26 @@ type ParentReadStatePersistFailedEvent struct {
 	Err  string
 }
 
+type ViewerLoadedEvent struct {
+	Login string
+}
+
+type ViewerLoadFailedEvent struct {
+	Err string
+}
+
+type ReviewReqStateLoadedEvent struct {
+	Refs        []string
+	PendingRefs []string
+	MergedRefs  []string
+	ClosedRefs  []string
+}
+
+type ReviewReqStateLoadFailedEvent struct {
+	Refs []string
+	Err  string
+}
+
 type ArchiveNotificationSucceededEvent struct {
 	OpID int64
 }
@@ -154,6 +174,10 @@ func (ParentReadStateLoadedEvent) isEvent()        {}
 func (ParentReadStateLoadFailedEvent) isEvent()    {}
 func (ParentReadStatePersistedEvent) isEvent()     {}
 func (ParentReadStatePersistFailedEvent) isEvent() {}
+func (ViewerLoadedEvent) isEvent()                 {}
+func (ViewerLoadFailedEvent) isEvent()             {}
+func (ReviewReqStateLoadedEvent) isEvent()         {}
+func (ReviewReqStateLoadFailedEvent) isEvent()     {}
 func (ArchiveNotificationSucceededEvent) isEvent() {}
 func (ArchiveNotificationFailedEvent) isEvent()    {}
 func (CommitDiffLoadedEvent) isEvent()             {}
@@ -207,6 +231,10 @@ type PersistParentReadStateEffect struct {
 	Read bool
 }
 
+type LoadViewerEffect struct{}
+
+type LoadReviewReqStateEffect struct{ Refs []string }
+
 type ArchiveNotificationEffect struct {
 	OpID      int64
 	ThreadID  string
@@ -228,6 +256,8 @@ func (LoadReadStateEffect) isEffect()          {}
 func (PersistReadStateEffect) isEffect()       {}
 func (LoadParentReadStateEffect) isEffect()    {}
 func (PersistParentReadStateEffect) isEffect() {}
+func (LoadViewerEffect) isEffect()             {}
+func (LoadReviewReqStateEffect) isEffect()     {}
 func (ArchiveNotificationEffect) isEffect()    {}
 func (OpenURLEffect) isEffect()                {}
 func (ScheduleAutoRefreshTickEffect) isEffect() {
@@ -246,6 +276,7 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 	switch e := ev.(type) {
 	case InitEvent:
 		effects = append(effects, StartNotificationsEffect{Generation: state.NotifGen})
+		effects = append(effects, LoadViewerEffect{})
 		effects = append(effects, ScheduleAutoRefreshTickEffect{})
 	case WindowSizeEvent:
 		state.Width = e.Width
@@ -326,7 +357,7 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 			openSelectedInBrowser(&state, &effects)
 		case "a":
 			clearMotionCount(&state)
-			openArchiveConfirm(&state)
+			openArchiveConfirm(&state, &effects)
 		case "A", "shift+a", "shift+A":
 			clearMotionCount(&state)
 			toggleMarkAllInCurrentView(&state)
@@ -382,6 +413,15 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 	case NotificationsArrivedEvent:
 		if e.Generation == state.NotifGen {
 			queueParentReadStateLoadsForRefs(&state, &effects, []string{e.Item.Target.Ref})
+			if e.Item.Target.Kind == "pr" {
+				delete(state.ReviewReqByRef, e.Item.Target.Ref)
+				delete(state.ReviewReqMergedByRef, e.Item.Target.Ref)
+				delete(state.ReviewReqClosedByRef, e.Item.Target.Ref)
+				delete(state.ReviewReqLoadedByRef, e.Item.Target.Ref)
+				delete(state.ReviewReqLoadInFlightByRef, e.Item.Target.Ref)
+				invalidateNotifMarkerCacheForRef(&state, e.Item.Target.Ref)
+				enqueueReviewReqLoadForRef(&state, &effects, e.Item.Target.Ref)
+			}
 			if state.RefreshInFlight && state.RefreshStage == "notifications" {
 				insertRefreshNotification(&state, e.Item)
 				break
@@ -406,11 +446,13 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 			if state.RefreshInFlight && state.RefreshStage == "notifications" {
 				commitRefreshNotifications(&state)
 				queueParentReadStateLoadsForRefs(&state, &effects, visibleRefs(state.visibleNotifications()))
+				queueReviewReqLoadsForNotifications(&state, &effects)
 				finishRefresh(&state, &effects)
 				break
 			}
 			state.NotifLoading = false
 			state.NotifDone = true
+			queueReviewReqLoadsForNotifications(&state, &effects)
 		}
 	case NotificationsErrEvent:
 		if e.Generation == state.NotifGen {
@@ -592,6 +634,68 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 		}
 		invalidateNotifMarkerCacheForRef(&state, pending.ref)
 		state.Status = "failed to persist parent read state: " + e.Err
+	case ViewerLoadedEvent:
+		state.ViewerLogin = strings.TrimSpace(e.Login)
+		state.ViewerLoaded = state.ViewerLogin != ""
+		if state.ViewerLoaded {
+			queueReviewReqLoadsForNotifications(&state, &effects)
+		}
+	case ViewerLoadFailedEvent:
+		state.ViewerLogin = ""
+		state.ViewerLoaded = false
+	case ReviewReqStateLoadedEvent:
+		pending := make(map[string]bool, len(e.PendingRefs))
+		for _, ref := range e.PendingRefs {
+			ref = strings.TrimSpace(ref)
+			if ref == "" {
+				continue
+			}
+			pending[ref] = true
+		}
+		merged := make(map[string]bool, len(e.MergedRefs))
+		for _, ref := range e.MergedRefs {
+			ref = strings.TrimSpace(ref)
+			if ref == "" {
+				continue
+			}
+			merged[ref] = true
+		}
+		closed := make(map[string]bool, len(e.ClosedRefs))
+		for _, ref := range e.ClosedRefs {
+			ref = strings.TrimSpace(ref)
+			if ref == "" {
+				continue
+			}
+			closed[ref] = true
+		}
+		for _, ref := range e.Refs {
+			ref = strings.TrimSpace(ref)
+			if ref == "" {
+				continue
+			}
+			delete(state.ReviewReqLoadInFlightByRef, ref)
+			state.ReviewReqLoadedByRef[ref] = true
+			if pending[ref] {
+				state.ReviewReqByRef[ref] = true
+			} else {
+				delete(state.ReviewReqByRef, ref)
+			}
+			if merged[ref] {
+				state.ReviewReqMergedByRef[ref] = true
+			} else {
+				delete(state.ReviewReqMergedByRef, ref)
+			}
+			if closed[ref] {
+				state.ReviewReqClosedByRef[ref] = true
+			} else {
+				delete(state.ReviewReqClosedByRef, ref)
+			}
+			invalidateNotifMarkerCacheForRef(&state, ref)
+		}
+	case ReviewReqStateLoadFailedEvent:
+		for _, ref := range e.Refs {
+			delete(state.ReviewReqLoadInFlightByRef, strings.TrimSpace(ref))
+		}
 	case ArchiveNotificationSucceededEvent:
 		pending, ok := state.PendingArchive[e.OpID]
 		if !ok {
@@ -2548,6 +2652,51 @@ func queueParentReadStateLoadsForRefs(state *AppState, effects *[]Effect, refs [
 	*effects = append(*effects, LoadParentReadStateEffect{Refs: toLoad})
 }
 
+func queueReviewReqLoadsForNotifications(state *AppState, effects *[]Effect) {
+	if state == nil {
+		return
+	}
+	refs := make([]string, 0, len(state.Notifications))
+	for _, n := range state.Notifications {
+		if strings.TrimSpace(n.kind) != "pr" {
+			continue
+		}
+		refs = append(refs, n.ref)
+	}
+	queueReviewReqStateLoadsForRefs(state, effects, refs)
+}
+
+func enqueueReviewReqLoadForRef(state *AppState, effects *[]Effect, ref string) {
+	queueReviewReqStateLoadsForRefs(state, effects, []string{ref})
+}
+
+func queueReviewReqStateLoadsForRefs(state *AppState, effects *[]Effect, refs []string) {
+	if state == nil || !state.ViewerLoaded || strings.TrimSpace(state.ViewerLogin) == "" {
+		return
+	}
+	if state.ReviewReqLoadedByRef == nil {
+		state.ReviewReqLoadedByRef = make(map[string]bool)
+	}
+	if state.ReviewReqLoadInFlightByRef == nil {
+		state.ReviewReqLoadInFlightByRef = make(map[string]bool)
+	}
+	toLoad := make([]string, 0, len(refs))
+	seen := make(map[string]bool, len(refs))
+	for _, ref := range refs {
+		ref = strings.TrimSpace(ref)
+		if ref == "" || seen[ref] || state.ReviewReqLoadedByRef[ref] || state.ReviewReqLoadInFlightByRef[ref] {
+			continue
+		}
+		seen[ref] = true
+		state.ReviewReqLoadInFlightByRef[ref] = true
+		toLoad = append(toLoad, ref)
+	}
+	if len(toLoad) == 0 {
+		return
+	}
+	*effects = append(*effects, LoadReviewReqStateEffect{Refs: toLoad})
+}
+
 func visibleRefs(rows []notifRow) []string {
 	refs := make([]string, 0, len(rows))
 	for _, n := range rows {
@@ -3068,20 +3217,39 @@ func markNotificationRead(state *AppState, effects *[]Effect, n notifRow) {
 	beginReadThrough(state, effects, n.ref, ts, true)
 }
 
-func openArchiveConfirm(state *AppState) {
+func openArchiveConfirm(state *AppState, effects *[]Effect) {
 	targets := archiveTargetNotifications(*state)
 	if len(targets) == 0 {
 		state.Status = "nothing to archive"
 		return
 	}
 	filtered := make([]notifRow, 0, len(targets))
+	blockedReview := 0
+	blockedUnknown := 0
 	for _, target := range targets {
 		if hasPendingArchiveForNotif(*state, target.id) {
+			continue
+		}
+		allow, reason := archiveAllowedForNotification(state, effects, target)
+		if !allow {
+			if reason == "waiting" {
+				blockedReview++
+			} else {
+				blockedUnknown++
+			}
 			continue
 		}
 		filtered = append(filtered, target)
 	}
 	if len(filtered) == 0 {
+		if blockedReview > 0 {
+			state.Status = "cannot archive: waiting on your review"
+			return
+		}
+		if blockedUnknown > 0 {
+			state.Status = "checking review status..."
+			return
+		}
 		state.Status = "archive already in progress"
 		return
 	}
@@ -3096,6 +3264,10 @@ func openArchiveConfirm(state *AppState) {
 		ref:      first.ref,
 		threadID: first.id,
 		from:     state.Focus,
+	}
+	if blockedReview > 0 || blockedUnknown > 0 {
+		state.Status = "press a again to confirm archive (some blocked)"
+		return
 	}
 	state.Status = "press a again to confirm archive"
 }
@@ -3125,6 +3297,10 @@ func confirmArchiveNotification(state *AppState, effects *[]Effect) {
 		}
 		n, ok := notificationByID(*state, notifID)
 		if !ok {
+			continue
+		}
+		allowed, _ := archiveAllowedForNotification(state, effects, n)
+		if !allowed {
 			continue
 		}
 		markNotificationRead(state, effects, n)
@@ -3228,6 +3404,31 @@ func archiveTargetNotifications(state AppState) []notifRow {
 		return []notifRow{n}
 	}
 	return nil
+}
+
+func archiveAllowedForNotification(state *AppState, effects *[]Effect, n notifRow) (bool, string) {
+	if state == nil {
+		return false, "unknown"
+	}
+	if strings.TrimSpace(n.kind) != "pr" {
+		return true, ""
+	}
+	if !state.ViewerLoaded || strings.TrimSpace(state.ViewerLogin) == "" {
+		*effects = append(*effects, LoadViewerEffect{})
+		enqueueReviewReqLoadForRef(state, effects, n.ref)
+		return false, "unknown"
+	}
+	if state.ReviewReqLoadInFlightByRef[n.ref] {
+		return false, "unknown"
+	}
+	if !state.ReviewReqLoadedByRef[n.ref] {
+		enqueueReviewReqLoadForRef(state, effects, n.ref)
+		return false, "unknown"
+	}
+	if state.ReviewReqByRef[n.ref] {
+		return false, "waiting"
+	}
+	return true, ""
 }
 
 func notificationForRef(state AppState, ref string) (notifRow, bool) {

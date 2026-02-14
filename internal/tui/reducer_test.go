@@ -2139,6 +2139,76 @@ func TestParentReadLoadedEventInvalidatesNotificationMarkerCache(t *testing.T) {
 	}
 }
 
+func TestNotificationUnreadMarkerUsesWaitingReviewOverride(t *testing.T) {
+	state := NewState()
+	n := notifRow{id: "n1", repo: "o/r", ref: "o/r#1", kind: "pr", title: "t"}
+	state.Notifications = []notifRow{n}
+	state.rebuildNotifIndex()
+	state.notifMarkerByRef[n.ref] = "    "
+	state.ReviewReqByRef[n.ref] = true
+
+	if got := state.notificationUnreadMarker(n); got != " !  " {
+		t.Fatalf("expected waiting-review marker override, got %q", got)
+	}
+}
+
+func TestNotificationUnreadMarkerUsesMergedOverride(t *testing.T) {
+	state := NewState()
+	n := notifRow{id: "n1", repo: "o/r", ref: "o/r#1", kind: "pr", title: "t"}
+	state.Notifications = []notifRow{n}
+	state.rebuildNotifIndex()
+	state.ReviewReqMergedByRef[n.ref] = true
+
+	if got := state.notificationUnreadMarker(n); got != " +  " {
+		t.Fatalf("expected merged marker override, got %q", got)
+	}
+}
+
+func TestNotificationUnreadMarkerUsesClosedOverride(t *testing.T) {
+	state := NewState()
+	n := notifRow{id: "n1", repo: "o/r", ref: "o/r#1", kind: "pr", title: "t"}
+	state.Notifications = []notifRow{n}
+	state.rebuildNotifIndex()
+	state.ReviewReqClosedByRef[n.ref] = true
+
+	if got := state.notificationUnreadMarker(n); got != " +  " {
+		t.Fatalf("expected closed marker override to match merged marker, got %q", got)
+	}
+}
+
+func TestReviewReqLoadedEventInvalidatesNotificationMarkerCache(t *testing.T) {
+	state := NewState()
+	n := notifRow{id: "n1", repo: "o/r", ref: "o/r#1", kind: "pr", title: "t"}
+	state.Notifications = []notifRow{n}
+	state.rebuildNotifIndex()
+	state.notifMarkerByRef[n.ref] = " ●  "
+
+	state, _ = Reduce(state, ReviewReqStateLoadedEvent{Refs: []string{n.ref}, PendingRefs: []string{n.ref}})
+	if !state.ReviewReqByRef[n.ref] {
+		t.Fatalf("expected review-request pending state for ref")
+	}
+	if got := state.notificationUnreadMarker(n); got != " !  " {
+		t.Fatalf("expected marker cache invalidated and waiting marker shown, got %q", got)
+	}
+}
+
+func TestReviewReqLoadedEventClearsWaitingMarkerWhenNoLongerPending(t *testing.T) {
+	state := NewState()
+	n := notifRow{id: "n1", repo: "o/r", ref: "o/r#1", kind: "pr", title: "t"}
+	state.Notifications = []notifRow{n}
+	state.rebuildNotifIndex()
+	state.notifMarkerByRef[n.ref] = " !  "
+	state.ReviewReqByRef[n.ref] = true
+
+	state, _ = Reduce(state, ReviewReqStateLoadedEvent{Refs: []string{n.ref}, PendingRefs: nil})
+	if state.ReviewReqByRef[n.ref] {
+		t.Fatalf("expected waiting state to clear")
+	}
+	if got := state.notificationUnreadMarker(n); got == " !  " {
+		t.Fatalf("expected marker to fall back from waiting marker")
+	}
+}
+
 func TestMotionCountPrefixMovesMultipleRows(t *testing.T) {
 	state := NewState()
 	state.Focus = focusNotifications
@@ -2626,6 +2696,32 @@ func TestArchiveKeyWhileArchivePendingDoesNotOpenModal(t *testing.T) {
 	}
 	if len(effects) != 0 {
 		t.Fatalf("expected no side effects, got %d", len(effects))
+	}
+}
+
+func TestArchiveBlockedWhenWaitingOnMyReview(t *testing.T) {
+	state := NewState()
+	state.Focus = focusNotifications
+	state.Notifications = []notifRow{{id: "42", repo: "o/r", title: "title", kind: "pr", ref: "o/r#1", updatedAt: time.Now().UTC()}}
+	state.rebuildNotifIndex()
+	state.SelectedNotif = "42"
+	state.NotifSelected = 0
+	state.CurrentRef = "o/r#1"
+	state.ViewerLoaded = true
+	state.ViewerLogin = "alice"
+	state.ReviewReqLoadedByRef["o/r#1"] = true
+	state.ReviewReqByRef["o/r#1"] = true
+
+	next, effects := Reduce(state, KeyEvent{Key: "a"})
+
+	if next.ArchiveConfirm != nil {
+		t.Fatalf("expected archive confirm to stay closed when waiting on review")
+	}
+	if next.Status != "cannot archive: waiting on your review" {
+		t.Fatalf("unexpected status: %q", next.Status)
+	}
+	if len(effects) != 0 {
+		t.Fatalf("expected no effects, got %d", len(effects))
 	}
 }
 
