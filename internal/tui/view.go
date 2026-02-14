@@ -243,18 +243,20 @@ func (m *model) renderNotifications(width, height int) string {
 		end = len(visible)
 	}
 	timeColWidth := notificationTimeColumnWidth(visible)
+	kindColWidth := notificationKindColumnWidth(visible)
 	repoColWidth := notificationRepoColumnWidth(visible)
 	for i := start; i < end; i++ {
 		n := visible[i]
 		marker := m.state.notificationUnreadMarker(n)
 		prefix := marker + padToDisplayWidth(timeAgo(n.updatedAt), timeColWidth) + " "
+		kind := padToDisplayWidth(notificationKindLabel(n.kind), kindColWidth)
 		repo := padToDisplayWidth(clampDisplayWidth(oneLine(n.repo), repoColWidth), repoColWidth)
-		label := prefix + repo + "  " + oneLine(n.title)
+		label := prefix + kind + " " + repo + "  " + oneLine(n.title)
 		avail := paneContentWidthWithRelativeNumbers(width, height)
 		if avail < 1 {
 			avail = 1
 		}
-		indentWidth := lipgloss.Width(prefix) + repoColWidth + 2
+		indentWidth := lipgloss.Width(prefix) + kindColWidth + 1 + repoColWidth + 2
 		minContinuationWidth := 12
 		maxIndent := avail - minContinuationWidth
 		if maxIndent < 0 {
@@ -272,12 +274,12 @@ func (m *model) renderNotifications(width, height int) string {
 		}
 		if current || marked {
 			for _, seg := range wrapped {
-				lines = append(lines, m.renderNotificationStyledLine(seg, avail, timeColWidth+5, current, marked))
+				lines = append(lines, m.renderNotificationStyledLine(seg, avail, timeColWidth+5, kindColWidth, current, marked))
 				rowIndexByLine = append(rowIndexByLine, i)
 			}
 		} else {
 			for _, seg := range wrapped {
-				lines = append(lines, m.renderNotificationStyledLine(seg, avail, timeColWidth+5, false, false))
+				lines = append(lines, m.renderNotificationStyledLine(seg, avail, timeColWidth+5, kindColWidth, false, false))
 				rowIndexByLine = append(rowIndexByLine, i)
 			}
 		}
@@ -384,6 +386,34 @@ func notificationRepoColumnWidth(rows []notifRow) int {
 	return width
 }
 
+func notificationKindLabel(kind string) string {
+	switch strings.TrimSpace(strings.ToLower(kind)) {
+	case "pull_request", "pull-request", "pr":
+		return "pr"
+	case "issue", "is":
+		return "is"
+	default:
+		return "??"
+	}
+}
+
+func notificationKindColumnWidth(rows []notifRow) int {
+	width := 2
+	for i := range rows {
+		w := lipgloss.Width(notificationKindLabel(rows[i].kind))
+		if w > width {
+			width = w
+		}
+	}
+	if width < 2 {
+		width = 2
+	}
+	if width > 2 {
+		return 2
+	}
+	return width
+}
+
 func renderNotificationTimestamp(line string, width int, style lipgloss.Style) string {
 	if width <= 0 || line == "" {
 		return line
@@ -395,34 +425,88 @@ func renderNotificationTimestamp(line string, width int, style lipgloss.Style) s
 	return style.Render(prefix) + rest
 }
 
-func (m *model) renderNotificationStyledLine(line string, width int, timeWidth int, current bool, marked bool) string {
+func (m *model) renderNotificationStyledLine(line string, width int, timeWidth int, kindWidth int, current bool, marked bool) string {
 	if width < 1 {
 		width = 1
 	}
 	padded := padToDisplayWidth(line, width)
 	prefix, rest := splitAtDisplayWidth(padded, timeWidth)
+	renderRest := func(content string) string {
+		if kindWidth <= 0 {
+			if marked {
+				return m.styles.selected.Render(content)
+			}
+			if current {
+				return m.styles.current.Render(content)
+			}
+			return content
+		}
+		kindCol, tail := splitAtExactDisplayWidth(content, kindWidth)
+		sep, body := splitAtExactDisplayWidth(tail, 1)
+		kindStyle := m.kindStyle(kindCol, current, marked)
+		kindRendered := kindStyle.Render(kindCol)
+		if marked {
+			return kindRendered + m.styles.selected.Render(sep+body)
+		}
+		if current {
+			return kindRendered + m.styles.current.Render(sep+body)
+		}
+		return kindRendered + sep + body
+	}
 
 	if marked {
 		if marker, remainder, ok := splitUnreadMarkerPrefix(prefix); ok {
 			return m.styles.unreadSelected.Render(marker) +
 				m.styles.selectedMuted.Render(remainder) +
-				m.styles.selected.Render(rest)
+				renderRest(rest)
 		}
-		return m.styles.selectedMuted.Render(prefix) + m.styles.selected.Render(rest)
+		return m.styles.selectedMuted.Render(prefix) + renderRest(rest)
 	}
 	if current {
 		if marker, remainder, ok := splitUnreadMarkerPrefix(prefix); ok {
 			return m.styles.unreadCurrent.Render(marker) +
 				m.styles.currentMuted.Render(remainder) +
-				m.styles.current.Render(rest)
+				renderRest(rest)
 		}
-		return m.styles.currentMuted.Render(prefix) + m.styles.current.Render(rest)
+		return m.styles.currentMuted.Render(prefix) + renderRest(rest)
 	}
 
 	if marker, remainder, ok := splitUnreadMarkerPrefix(prefix); ok {
-		return m.styles.unreadMarker.Render(marker) + m.styles.muted.Render(remainder) + rest
+		return m.styles.unreadMarker.Render(marker) + m.styles.muted.Render(remainder) + renderRest(rest)
 	}
-	return m.styles.muted.Render(prefix) + rest
+	return m.styles.muted.Render(prefix) + renderRest(rest)
+}
+
+func (m *model) kindStyle(kind string, current bool, marked bool) lipgloss.Style {
+	normalized := strings.TrimSpace(strings.ToLower(kind))
+	if marked {
+		switch normalized {
+		case "pr":
+			return m.styles.kindPRSelected
+		case "is":
+			return m.styles.kindISSelected
+		default:
+			return m.styles.kindUnkSelected
+		}
+	}
+	if current {
+		switch normalized {
+		case "pr":
+			return m.styles.kindPRCurrent
+		case "is":
+			return m.styles.kindISCurrent
+		default:
+			return m.styles.kindUnkCurrent
+		}
+	}
+	switch normalized {
+	case "pr":
+		return m.styles.kindPR
+	case "is":
+		return m.styles.kindIS
+	default:
+		return m.styles.kindUnknown
+	}
 }
 
 func (m *model) renderTimeline(width, height int) string {

@@ -216,15 +216,17 @@ func notificationRowAtY(state AppState, y, width int) int {
 		avail = 1
 	}
 	timeColWidth := notificationTimeColumnWidth(visible)
+	kindColWidth := notificationKindColumnWidth(visible)
 	repoColWidth := notificationRepoColumnWidth(visible)
 	line := y - 1
 
 	for i := state.NotifScroll; i < len(visible); i++ {
 		n := visible[i]
 		prefix := state.notificationUnreadMarker(n) + padToDisplayWidth(timeAgo(n.updatedAt), timeColWidth) + " "
+		kind := padToDisplayWidth(notificationKindLabel(n.kind), kindColWidth)
 		repo := padToDisplayWidth(clampDisplayWidth(oneLine(n.repo), repoColWidth), repoColWidth)
-		label := prefix + repo + "  " + oneLine(n.title)
-		titleIndent := strings.Repeat(" ", lipgloss.Width(prefix)+repoColWidth+2)
+		label := prefix + kind + " " + repo + "  " + oneLine(n.title)
+		titleIndent := strings.Repeat(" ", lipgloss.Width(prefix)+kindColWidth+1+repoColWidth+2)
 		wrapped := wrapDisplayWidth(label, avail, titleIndent)
 		h := len(wrapped)
 		if h < 1 {

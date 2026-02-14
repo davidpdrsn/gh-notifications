@@ -27,33 +27,42 @@ type model struct {
 }
 
 type styles struct {
-	title          lipgloss.Style
-	text           lipgloss.Style
-	secondary      lipgloss.Style
-	selected       lipgloss.Style
-	selectedMuted  lipgloss.Style
-	current        lipgloss.Style
-	currentMuted   lipgloss.Style
-	muted          lipgloss.Style
-	unreadMarker   lipgloss.Style
-	unreadSelected lipgloss.Style
-	unreadCurrent  lipgloss.Style
-	error          lipgloss.Style
-	status         lipgloss.Style
-	tab            lipgloss.Style
-	tabActive      lipgloss.Style
-	separator      lipgloss.Style
-	inactiveColumn lipgloss.Style
-	eventInfo      lipgloss.Style
-	eventSuccess   lipgloss.Style
-	eventWarning   lipgloss.Style
-	eventDanger    lipgloss.Style
-	diffHeader     lipgloss.Style
-	diffHunk       lipgloss.Style
-	diffAdd        lipgloss.Style
-	diffDel        lipgloss.Style
-	lineNumber     lipgloss.Style
-	lineNumberZero lipgloss.Style
+	title           lipgloss.Style
+	text            lipgloss.Style
+	secondary       lipgloss.Style
+	selected        lipgloss.Style
+	selectedMuted   lipgloss.Style
+	current         lipgloss.Style
+	currentMuted    lipgloss.Style
+	muted           lipgloss.Style
+	unreadMarker    lipgloss.Style
+	unreadSelected  lipgloss.Style
+	unreadCurrent   lipgloss.Style
+	kindPR          lipgloss.Style
+	kindIS          lipgloss.Style
+	kindUnknown     lipgloss.Style
+	kindPRSelected  lipgloss.Style
+	kindISSelected  lipgloss.Style
+	kindUnkSelected lipgloss.Style
+	kindPRCurrent   lipgloss.Style
+	kindISCurrent   lipgloss.Style
+	kindUnkCurrent  lipgloss.Style
+	error           lipgloss.Style
+	status          lipgloss.Style
+	tab             lipgloss.Style
+	tabActive       lipgloss.Style
+	separator       lipgloss.Style
+	inactiveColumn  lipgloss.Style
+	eventInfo       lipgloss.Style
+	eventSuccess    lipgloss.Style
+	eventWarning    lipgloss.Style
+	eventDanger     lipgloss.Style
+	diffHeader      lipgloss.Style
+	diffHunk        lipgloss.Style
+	diffAdd         lipgloss.Style
+	diffDel         lipgloss.Style
+	lineNumber      lipgloss.Style
+	lineNumberZero  lipgloss.Style
 }
 
 func newModel(ctx context.Context, client *ghpr.Client, store *readstate.Store) *model {
@@ -82,6 +91,17 @@ func newModel(ctx context.Context, client *ghpr.Client, store *readstate.Store) 
 			unreadMarker:   lipgloss.NewStyle().Foreground(t.warning),
 			unreadSelected: lipgloss.NewStyle().Foreground(t.warning).Background(t.selectedBg),
 			unreadCurrent:  lipgloss.NewStyle().Foreground(t.warning).Background(lipgloss.Color("#3A3C4F")),
+			kindPR:         lipgloss.NewStyle().Foreground(t.info),
+			kindIS:         lipgloss.NewStyle().Foreground(t.success),
+			kindUnknown:    lipgloss.NewStyle().Foreground(t.textMuted),
+			kindPRSelected: lipgloss.NewStyle().Foreground(t.info).Background(t.selectedBg),
+			kindISSelected: lipgloss.NewStyle().Foreground(t.success).Background(t.selectedBg),
+			kindUnkSelected: lipgloss.NewStyle().
+				Foreground(t.textMuted).
+				Background(t.selectedBg),
+			kindPRCurrent:  lipgloss.NewStyle().Foreground(t.info).Background(lipgloss.Color("#3A3C4F")),
+			kindISCurrent:  lipgloss.NewStyle().Foreground(t.success).Background(lipgloss.Color("#3A3C4F")),
+			kindUnkCurrent: lipgloss.NewStyle().Foreground(t.textMuted).Background(lipgloss.Color("#3A3C4F")),
 			error:          lipgloss.NewStyle().Foreground(t.danger),
 			status: lipgloss.NewStyle().
 				Foreground(t.statusFg).

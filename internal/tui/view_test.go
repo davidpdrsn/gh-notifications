@@ -718,7 +718,7 @@ func TestSelectedUnreadTimelineRowKeepsSelectionBackgroundOnMarker(t *testing.T)
 func TestSelectedUnreadNotificationRowKeepsMarkerAndSelectedTimestampStyling(t *testing.T) {
 	m := newModel(context.Background(), nil, nil)
 	line := " ●  1h owner/repo  Add support for marker styling"
-	out := m.renderNotificationStyledLine(line, 70, 8, false, true)
+	out := m.renderNotificationStyledLine(line, 70, 8, 2, false, true)
 
 	if !strings.Contains(out, m.styles.unreadSelected.Render(" ●  ")) {
 		t.Fatalf("expected selected unread marker style, got %q", out)
@@ -739,7 +739,7 @@ func TestSelectedUnreadNotificationRowKeepsMarkerAndSelectedTimestampStyling(t *
 func TestSelectedPartialNotificationRowKeepsMarkerStyling(t *testing.T) {
 	m := newModel(context.Background(), nil, nil)
 	line := " ◐  1h owner/repo  Partial read state"
-	out := m.renderNotificationStyledLine(line, 70, 8, false, true)
+	out := m.renderNotificationStyledLine(line, 70, 8, 2, false, true)
 
 	if !strings.Contains(out, m.styles.unreadSelected.Render(" ◐  ")) {
 		t.Fatalf("expected selected partial marker style, got %q", out)
@@ -749,10 +749,32 @@ func TestSelectedPartialNotificationRowKeepsMarkerStyling(t *testing.T) {
 func TestCurrentNotificationRowUsesCurrentBackgroundStyling(t *testing.T) {
 	m := newModel(context.Background(), nil, nil)
 	line := " ●  1h owner/repo  Current row"
-	out := m.renderNotificationStyledLine(line, 70, 8, true, false)
+	out := m.renderNotificationStyledLine(line, 70, 8, 2, true, false)
 
 	if !strings.Contains(out, m.styles.unreadCurrent.Render(" ●  ")) {
 		t.Fatalf("expected current unread marker style, got %q", out)
+	}
+}
+
+func TestRenderNotificationsShowsLowercaseKindLabels(t *testing.T) {
+	m := newModel(context.Background(), nil, nil)
+	m.state.Width = 100
+	m.state.Height = 20
+	m.state.Notifications = []notifRow{
+		{id: "n1", repo: "owner/repo", kind: "pull_request", ref: "owner/repo#1", title: "pr title", updatedAt: time.Now().UTC()},
+		{id: "n2", repo: "owner/repo", kind: "issue", ref: "owner/repo#2", title: "issue title", updatedAt: time.Now().UTC().Add(-time.Minute)},
+	}
+	m.state.rebuildNotifIndex()
+	m.state.SelectedNotif = "n1"
+	m.state.NotifSelected = 0
+
+	leftW, _, _ := paneWidths(panesTotalWidth(m.state.Width, m.state.Focus, m.state.currentPaneMode()), m.state.Focus, m.state.currentPaneMode())
+	out := m.renderNotifications(leftW, paneInnerHeight(m.state))
+	if !strings.Contains(out, "pr") {
+		t.Fatalf("expected pr kind label in notifications output")
+	}
+	if !strings.Contains(out, "is") {
+		t.Fatalf("expected is kind label in notifications output")
 	}
 }
 
