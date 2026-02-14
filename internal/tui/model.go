@@ -32,9 +32,12 @@ type styles struct {
 	secondary      lipgloss.Style
 	selected       lipgloss.Style
 	selectedMuted  lipgloss.Style
+	current        lipgloss.Style
+	currentMuted   lipgloss.Style
 	muted          lipgloss.Style
 	unreadMarker   lipgloss.Style
 	unreadSelected lipgloss.Style
+	unreadCurrent  lipgloss.Style
 	error          lipgloss.Style
 	status         lipgloss.Style
 	tab            lipgloss.Style
@@ -70,9 +73,15 @@ func newModel(ctx context.Context, client *ghpr.Client, store *readstate.Store) 
 			selectedMuted: lipgloss.NewStyle().
 				Background(t.selectedBg).
 				Foreground(t.textMuted),
+			current: lipgloss.NewStyle().
+				Background(lipgloss.Color("#3A3C4F")),
+			currentMuted: lipgloss.NewStyle().
+				Background(lipgloss.Color("#3A3C4F")).
+				Foreground(t.textMuted),
 			muted:          lipgloss.NewStyle().Foreground(t.textMuted),
 			unreadMarker:   lipgloss.NewStyle().Foreground(t.warning),
 			unreadSelected: lipgloss.NewStyle().Foreground(t.warning).Background(t.selectedBg),
+			unreadCurrent:  lipgloss.NewStyle().Foreground(t.warning).Background(lipgloss.Color("#3A3C4F")),
 			error:          lipgloss.NewStyle().Foreground(t.danger),
 			status: lipgloss.NewStyle().
 				Foreground(t.statusFg).

@@ -237,6 +237,7 @@ func (ScheduleRefreshSpinnerTickEffect) isEffect() {
 
 func Reduce(state AppState, ev Event) (AppState, []Effect) {
 	effects := make([]Effect, 0)
+	focusBefore := state.Focus
 	expectedTimelineRef := state.TimelineLoadingRef
 	if expectedTimelineRef == "" {
 		expectedTimelineRef = state.CurrentRef
@@ -326,6 +327,12 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 		case "a":
 			clearMotionCount(&state)
 			openArchiveConfirm(&state)
+		case "A", "shift+a", "shift+A":
+			clearMotionCount(&state)
+			toggleMarkAllInCurrentView(&state)
+		case " ", "space":
+			clearMotionCount(&state)
+			toggleMarkAtSelection(&state, &effects)
 		case "?":
 			clearMotionCount(&state)
 			state.HelpOpen = true
@@ -345,6 +352,11 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 		case "left", "h", "backspace":
 			clearMotionCount(&state)
 			backOut(&state)
+		case "esc":
+			clearMotionCount(&state)
+			if clearAllMarks(&state) {
+				state.Status = "cleared marks"
+			}
 		case "H", "shift+h", "shift+H":
 			clearMotionCount(&state)
 			state.HideRead = !state.HideRead
@@ -647,6 +659,9 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 	}
 
 	queueSelectedDetailDiff(&state, &effects)
+	if state.Focus != focusBefore {
+		clearAllMarks(&state)
+	}
 
 	normalizeState(&state)
 
@@ -801,6 +816,10 @@ func queueSelectedDetailDiff(state *AppState, effects *[]Effect) {
 }
 
 func toggleSelectedRead(state *AppState, effects *[]Effect) {
+	if toggleMarkedRead(state, effects) {
+		return
+	}
+
 	ts := state.currentTimeline()
 	if ts == nil {
 		return
@@ -994,6 +1013,451 @@ func toggleSelectedRead(state *AppState, effects *[]Effect) {
 		}
 		state.DetailScroll = 0
 	}
+}
+
+func toggleMarkAtSelection(state *AppState, effects *[]Effect) {
+	switch state.Focus {
+	case focusNotifications:
+		visible := state.visibleNotifications()
+		if len(visible) == 0 || state.SelectedNotif == "" {
+			return
+		}
+		idx := indexOfNotificationByID(visible, state.SelectedNotif)
+		if idx < 0 || idx >= len(visible) {
+			return
+		}
+		toggleNotifMarked(state, visible[idx].id)
+		if idx < len(visible)-1 {
+			state.NotifSelected = idx + 1
+			selectNotificationByID(state, effects, visible[idx+1].id)
+			state.DetailScroll = 0
+		}
+	case focusTimeline:
+		ts := state.currentTimeline()
+		if ts == nil {
+			return
+		}
+		rows := ts.rowsReadyForDisplay(ts.displayRows(state.HideRead))
+		if len(rows) == 0 {
+			return
+		}
+		idx := indexOfTimelineSelection(rows, ts.selectedID)
+		if idx < 0 || idx >= len(rows) {
+			return
+		}
+		toggleTimelineMarked(state, state.CurrentRef, rows[idx].id)
+		if idx < len(rows)-1 {
+			ts.selectedID = rows[idx+1].id
+			ts.selectedIndex = idx + 1
+			ensureTimelineSelectionVisible(state, ts)
+			state.DetailScroll = 0
+		}
+	case focusThread:
+		ts := state.currentTimeline()
+		if ts == nil || ts.activeThreadID == "" {
+			return
+		}
+		rows := ts.rowsReadyForDisplay(ts.threadRows(ts.activeThreadID, state.HideRead))
+		if len(rows) == 0 {
+			return
+		}
+		idx := indexOfThreadSelection(rows, ts.threadSelectedID)
+		if idx < 0 || idx >= len(rows) {
+			return
+		}
+		toggleThreadMarked(state, state.CurrentRef, rows[idx].id)
+		if idx < len(rows)-1 {
+			ts.threadSelectedID = rows[idx+1].id
+			ts.threadSelectedIndex = idx + 1
+			ensureThreadSelectionVisible(state, ts)
+			state.DetailScroll = 0
+		}
+	}
+}
+
+func toggleMarkAllInCurrentView(state *AppState) {
+	switch state.Focus {
+	case focusNotifications:
+		visible := state.visibleNotifications()
+		if len(visible) == 0 {
+			return
+		}
+		allMarked := true
+		for _, n := range visible {
+			if !state.MarkedNotifications[n.id] {
+				allMarked = false
+				break
+			}
+		}
+		if allMarked {
+			for _, n := range visible {
+				clearNotifMarked(state, n.id)
+			}
+			state.Status = "unmarked notifications"
+			return
+		}
+		for _, n := range visible {
+			if state.MarkedNotifications == nil {
+				state.MarkedNotifications = make(map[string]bool)
+			}
+			state.MarkedNotifications[n.id] = true
+		}
+		state.Status = "marked notifications"
+	case focusTimeline:
+		ts := state.currentTimeline()
+		if ts == nil || strings.TrimSpace(state.CurrentRef) == "" {
+			return
+		}
+		rows := ts.rowsReadyForDisplay(ts.displayRows(state.HideRead))
+		if len(rows) == 0 {
+			return
+		}
+		marked := state.MarkedTimelineByRef[state.CurrentRef]
+		allMarked := true
+		for _, row := range rows {
+			if marked == nil || !marked[row.id] {
+				allMarked = false
+				break
+			}
+		}
+		if allMarked {
+			delete(state.MarkedTimelineByRef, state.CurrentRef)
+			state.Status = "unmarked timeline rows"
+			return
+		}
+		if state.MarkedTimelineByRef == nil {
+			state.MarkedTimelineByRef = make(map[string]map[string]bool)
+		}
+		if state.MarkedTimelineByRef[state.CurrentRef] == nil {
+			state.MarkedTimelineByRef[state.CurrentRef] = make(map[string]bool)
+		}
+		for _, row := range rows {
+			state.MarkedTimelineByRef[state.CurrentRef][row.id] = true
+		}
+		state.Status = "marked timeline rows"
+	case focusThread:
+		ts := state.currentTimeline()
+		if ts == nil || ts.activeThreadID == "" || strings.TrimSpace(state.CurrentRef) == "" {
+			return
+		}
+		rows := ts.rowsReadyForDisplay(ts.threadRows(ts.activeThreadID, state.HideRead))
+		if len(rows) == 0 {
+			return
+		}
+		marked := state.MarkedThreadByRef[state.CurrentRef]
+		allMarked := true
+		for _, row := range rows {
+			if marked == nil || !marked[row.id] {
+				allMarked = false
+				break
+			}
+		}
+		if allMarked {
+			delete(state.MarkedThreadByRef, state.CurrentRef)
+			state.Status = "unmarked thread rows"
+			return
+		}
+		if state.MarkedThreadByRef == nil {
+			state.MarkedThreadByRef = make(map[string]map[string]bool)
+		}
+		if state.MarkedThreadByRef[state.CurrentRef] == nil {
+			state.MarkedThreadByRef[state.CurrentRef] = make(map[string]bool)
+		}
+		for _, row := range rows {
+			state.MarkedThreadByRef[state.CurrentRef][row.id] = true
+		}
+		state.Status = "marked thread rows"
+	}
+}
+
+func toggleMarkedRead(state *AppState, effects *[]Effect) bool {
+	switch state.Focus {
+	case focusNotifications:
+		targets := markedNotificationTargets(*state)
+		if len(targets) == 0 {
+			return false
+		}
+		for _, n := range targets {
+			toggleNotificationReadNoAdvance(state, effects, n)
+			clearNotifMarked(state, n.id)
+		}
+		state.Status = "updated read state"
+		return true
+	case focusTimeline, focusDetail:
+		ts := state.currentTimeline()
+		if ts == nil {
+			return false
+		}
+		rows := markedTimelineRowsForCurrentRef(*state)
+		if len(rows) == 0 {
+			return false
+		}
+		for _, row := range rows {
+			toggleTimelineRowReadNoAdvance(state, effects, ts, row)
+			clearTimelineMarked(state, state.CurrentRef, row.id)
+		}
+		state.Status = "updated read state"
+		return true
+	case focusThread:
+		ts := state.currentTimeline()
+		if ts == nil || ts.activeThreadID == "" {
+			return false
+		}
+		rows := markedThreadRowsForCurrentRef(*state)
+		if len(rows) == 0 {
+			return false
+		}
+		for _, row := range rows {
+			toggleTimelineRowReadNoAdvance(state, effects, ts, row)
+			clearThreadMarked(state, state.CurrentRef, row.id)
+		}
+		state.Status = "updated read state"
+		return true
+	default:
+		return false
+	}
+}
+
+func toggleNotificationReadNoAdvance(state *AppState, effects *[]Effect, n notifRow) {
+	targetRef := n.ref
+	targetTS := state.TimelineByRef[targetRef]
+	if targetTS == nil {
+		ensureTimelineState(state, targetRef)
+		targetTS = state.TimelineByRef[targetRef]
+	}
+	if targetTS == nil {
+		return
+	}
+	eventIDs := targetTS.allEventIDs()
+	currentRead := true
+	for _, id := range eventIDs {
+		if id == "" {
+			continue
+		}
+		if !targetTS.readByEventID[id] {
+			currentRead = false
+			break
+		}
+	}
+	if len(eventIDs) == 0 {
+		setParentReadOverride(state, effects, targetRef, true)
+		beginReadThrough(state, effects, targetRef, targetTS, true)
+		return
+	}
+	desiredRead := !currentRead
+	if desiredRead {
+		setParentReadOverride(state, effects, targetRef, true)
+		beginReadThrough(state, effects, targetRef, targetTS, true)
+	} else {
+		setParentReadOverride(state, effects, targetRef, false)
+	}
+	ensureReadStateMaps(targetTS)
+	state.NextReadOpID++
+	opID := state.NextReadOpID
+	if state.PendingRead == nil {
+		state.PendingRead = make(map[int64]pendingReadOp)
+	}
+	prevRead := make(map[string]bool, len(eventIDs))
+	prevKnown := make(map[string]bool, len(eventIDs))
+	for _, id := range eventIDs {
+		if id == "" {
+			continue
+		}
+		prevRead[id] = targetTS.readByEventID[id]
+		prevKnown[id] = targetTS.readKnownByEventID[id]
+		targetTS.readByEventID[id] = desiredRead
+		targetTS.readKnownByEventID[id] = true
+	}
+	state.PendingRead[opID] = pendingReadOp{ref: targetRef, eventIDs: append([]string(nil), eventIDs...), read: desiredRead, prevRead: prevRead, prevKnown: prevKnown}
+	*effects = append(*effects, PersistReadStateEffect{OpID: opID, Ref: targetRef, EventIDs: append([]string(nil), eventIDs...), Read: desiredRead})
+}
+
+func toggleTimelineRowReadNoAdvance(state *AppState, effects *[]Effect, ts *timelineState, row displayTimelineRow) {
+	if ts == nil {
+		return
+	}
+	eventIDs := ts.rowLeafEventIDs(row)
+	if len(eventIDs) == 0 {
+		return
+	}
+	desiredRead := !ts.rowRead(row)
+	if !desiredRead {
+		setParentReadOverride(state, effects, state.CurrentRef, false)
+	}
+	ensureReadStateMaps(ts)
+	state.NextReadOpID++
+	opID := state.NextReadOpID
+	if state.PendingRead == nil {
+		state.PendingRead = make(map[int64]pendingReadOp)
+	}
+	prevRead := make(map[string]bool, len(eventIDs))
+	prevKnown := make(map[string]bool, len(eventIDs))
+	for _, id := range eventIDs {
+		if id == "" {
+			continue
+		}
+		prevRead[id] = ts.readByEventID[id]
+		prevKnown[id] = ts.readKnownByEventID[id]
+		ts.readByEventID[id] = desiredRead
+		ts.readKnownByEventID[id] = true
+	}
+	state.PendingRead[opID] = pendingReadOp{ref: state.CurrentRef, eventIDs: append([]string(nil), eventIDs...), read: desiredRead, prevRead: prevRead, prevKnown: prevKnown}
+	*effects = append(*effects, PersistReadStateEffect{OpID: opID, Ref: state.CurrentRef, EventIDs: append([]string(nil), eventIDs...), Read: desiredRead})
+}
+
+func toggleNotifMarked(state *AppState, notifID string) {
+	notifID = strings.TrimSpace(notifID)
+	if notifID == "" {
+		return
+	}
+	if state.MarkedNotifications == nil {
+		state.MarkedNotifications = make(map[string]bool)
+	}
+	if state.MarkedNotifications[notifID] {
+		delete(state.MarkedNotifications, notifID)
+		return
+	}
+	state.MarkedNotifications[notifID] = true
+}
+
+func clearNotifMarked(state *AppState, notifID string) {
+	if state == nil || state.MarkedNotifications == nil {
+		return
+	}
+	delete(state.MarkedNotifications, strings.TrimSpace(notifID))
+}
+
+func toggleTimelineMarked(state *AppState, ref string, rowID string) {
+	ref = strings.TrimSpace(ref)
+	rowID = strings.TrimSpace(rowID)
+	if ref == "" || rowID == "" {
+		return
+	}
+	if state.MarkedTimelineByRef == nil {
+		state.MarkedTimelineByRef = make(map[string]map[string]bool)
+	}
+	rows := state.MarkedTimelineByRef[ref]
+	if rows == nil {
+		rows = make(map[string]bool)
+		state.MarkedTimelineByRef[ref] = rows
+	}
+	if rows[rowID] {
+		delete(rows, rowID)
+		if len(rows) == 0 {
+			delete(state.MarkedTimelineByRef, ref)
+		}
+		return
+	}
+	rows[rowID] = true
+}
+
+func clearTimelineMarked(state *AppState, ref string, rowID string) {
+	if state == nil || state.MarkedTimelineByRef == nil {
+		return
+	}
+	rows := state.MarkedTimelineByRef[strings.TrimSpace(ref)]
+	if rows == nil {
+		return
+	}
+	delete(rows, strings.TrimSpace(rowID))
+	if len(rows) == 0 {
+		delete(state.MarkedTimelineByRef, strings.TrimSpace(ref))
+	}
+}
+
+func toggleThreadMarked(state *AppState, ref string, rowID string) {
+	ref = strings.TrimSpace(ref)
+	rowID = strings.TrimSpace(rowID)
+	if ref == "" || rowID == "" {
+		return
+	}
+	if state.MarkedThreadByRef == nil {
+		state.MarkedThreadByRef = make(map[string]map[string]bool)
+	}
+	rows := state.MarkedThreadByRef[ref]
+	if rows == nil {
+		rows = make(map[string]bool)
+		state.MarkedThreadByRef[ref] = rows
+	}
+	if rows[rowID] {
+		delete(rows, rowID)
+		if len(rows) == 0 {
+			delete(state.MarkedThreadByRef, ref)
+		}
+		return
+	}
+	rows[rowID] = true
+}
+
+func clearThreadMarked(state *AppState, ref string, rowID string) {
+	if state == nil || state.MarkedThreadByRef == nil {
+		return
+	}
+	rows := state.MarkedThreadByRef[strings.TrimSpace(ref)]
+	if rows == nil {
+		return
+	}
+	delete(rows, strings.TrimSpace(rowID))
+	if len(rows) == 0 {
+		delete(state.MarkedThreadByRef, strings.TrimSpace(ref))
+	}
+}
+
+func markedNotificationTargets(state AppState) []notifRow {
+	if len(state.MarkedNotifications) == 0 {
+		return nil
+	}
+	targets := make([]notifRow, 0, len(state.MarkedNotifications))
+	for _, n := range state.Notifications {
+		if state.MarkedNotifications[n.id] {
+			targets = append(targets, n)
+		}
+	}
+	return targets
+}
+
+func markedTimelineRowsForCurrentRef(state AppState) []displayTimelineRow {
+	if state.CurrentRef == "" || len(state.MarkedTimelineByRef) == 0 {
+		return nil
+	}
+	marked := state.MarkedTimelineByRef[state.CurrentRef]
+	if len(marked) == 0 {
+		return nil
+	}
+	ts := state.TimelineByRef[state.CurrentRef]
+	if ts == nil {
+		return nil
+	}
+	rows := ts.rowsReadyForDisplay(ts.displayRows(state.HideRead))
+	out := make([]displayTimelineRow, 0, len(marked))
+	for _, row := range rows {
+		if marked[row.id] {
+			out = append(out, row)
+		}
+	}
+	return out
+}
+
+func markedThreadRowsForCurrentRef(state AppState) []displayTimelineRow {
+	if state.CurrentRef == "" || len(state.MarkedThreadByRef) == 0 {
+		return nil
+	}
+	ts := state.TimelineByRef[state.CurrentRef]
+	if ts == nil || ts.activeThreadID == "" {
+		return nil
+	}
+	marked := state.MarkedThreadByRef[state.CurrentRef]
+	if len(marked) == 0 {
+		return nil
+	}
+	rows := ts.rowsReadyForDisplay(ts.threadRows(ts.activeThreadID, state.HideRead))
+	out := make([]displayTimelineRow, 0, len(marked))
+	for _, row := range rows {
+		if marked[row.id] {
+			out = append(out, row)
+		}
+	}
+	return out
 }
 
 func appendMotionCount(state *AppState, key string) bool {
@@ -1567,12 +2031,64 @@ func backOut(state *AppState) {
 }
 
 func normalizeState(state *AppState) {
+	pruneMarkedSelections(state)
 	normalizeNotifications(state)
 	if ts := state.currentTimeline(); ts != nil {
 		normalizeTimeline(state, ts)
 		normalizeThread(state, ts)
 	}
 	normalizeDetail(state)
+}
+
+func pruneMarkedSelections(state *AppState) {
+	if state == nil {
+		return
+	}
+	if len(state.MarkedNotifications) > 0 {
+		for id := range state.MarkedNotifications {
+			if _, ok := state.NotifIndexByID[id]; !ok {
+				delete(state.MarkedNotifications, id)
+			}
+		}
+	}
+	for ref, marked := range state.MarkedTimelineByRef {
+		ts := state.TimelineByRef[ref]
+		if ts == nil || len(marked) == 0 {
+			delete(state.MarkedTimelineByRef, ref)
+			continue
+		}
+		valid := make(map[string]bool)
+		for _, row := range ts.rowsReadyForDisplay(ts.displayRows(state.HideRead)) {
+			valid[row.id] = true
+		}
+		for rowID := range marked {
+			if !valid[rowID] {
+				delete(marked, rowID)
+			}
+		}
+		if len(marked) == 0 {
+			delete(state.MarkedTimelineByRef, ref)
+		}
+	}
+	for ref, marked := range state.MarkedThreadByRef {
+		ts := state.TimelineByRef[ref]
+		if ts == nil || ts.activeThreadID == "" || len(marked) == 0 {
+			delete(state.MarkedThreadByRef, ref)
+			continue
+		}
+		valid := make(map[string]bool)
+		for _, row := range ts.rowsReadyForDisplay(ts.threadRows(ts.activeThreadID, state.HideRead)) {
+			valid[row.id] = true
+		}
+		for rowID := range marked {
+			if !valid[rowID] {
+				delete(marked, rowID)
+			}
+		}
+		if len(marked) == 0 {
+			delete(state.MarkedThreadByRef, ref)
+		}
+	}
 }
 
 func normalizeNotifications(state *AppState) {
@@ -2547,19 +3063,32 @@ func markNotificationRead(state *AppState, effects *[]Effect, n notifRow) {
 }
 
 func openArchiveConfirm(state *AppState) {
-	target, ok := archiveTargetNotification(*state)
-	if !ok {
+	targets := archiveTargetNotifications(*state)
+	if len(targets) == 0 {
 		state.Status = "nothing to archive"
 		return
 	}
-	if hasPendingArchiveForNotif(*state, target.id) {
+	filtered := make([]notifRow, 0, len(targets))
+	for _, target := range targets {
+		if hasPendingArchiveForNotif(*state, target.id) {
+			continue
+		}
+		filtered = append(filtered, target)
+	}
+	if len(filtered) == 0 {
 		state.Status = "archive already in progress"
 		return
 	}
+	notifIDs := make([]string, 0, len(filtered))
+	for _, t := range filtered {
+		notifIDs = append(notifIDs, t.id)
+	}
+	first := filtered[0]
 	state.ArchiveConfirm = &archiveConfirmState{
-		notifID:  target.id,
-		ref:      target.ref,
-		threadID: target.id,
+		notifID:  first.id,
+		notifIDs: notifIDs,
+		ref:      first.ref,
+		threadID: first.id,
 		from:     state.Focus,
 	}
 	state.Status = "press a again to confirm archive"
@@ -2574,33 +3103,75 @@ func confirmArchiveNotification(state *AppState, effects *[]Effect) {
 	if confirm == nil {
 		return
 	}
-	if hasPendingArchiveForNotif(*state, confirm.notifID) {
-		closeArchiveConfirm(state)
-		state.Status = "archive already in progress"
-		return
+	notifIDs := append([]string(nil), confirm.notifIDs...)
+	if len(notifIDs) == 0 && strings.TrimSpace(confirm.notifID) != "" {
+		notifIDs = []string{confirm.notifID}
 	}
-	n, ok := notificationByID(*state, confirm.notifID)
-	if !ok {
+	if len(notifIDs) == 0 {
 		closeArchiveConfirm(state)
 		state.Status = "notification no longer available"
 		return
 	}
-	markNotificationRead(state, effects, n)
+	queued := 0
+	for _, notifID := range notifIDs {
+		if hasPendingArchiveForNotif(*state, notifID) {
+			continue
+		}
+		n, ok := notificationByID(*state, notifID)
+		if !ok {
+			continue
+		}
+		markNotificationRead(state, effects, n)
 
-	state.NextArchiveOpID++
-	opID := state.NextArchiveOpID
-	if state.PendingArchive == nil {
-		state.PendingArchive = make(map[int64]pendingArchiveOp)
+		state.NextArchiveOpID++
+		opID := state.NextArchiveOpID
+		if state.PendingArchive == nil {
+			state.PendingArchive = make(map[int64]pendingArchiveOp)
+		}
+		state.PendingArchive[opID] = pendingArchiveOp{notifID: n.id, ref: n.ref, threadID: n.id, from: confirm.from}
+		*effects = append(*effects, ArchiveNotificationEffect{OpID: opID, ThreadID: n.id, UpdatedAt: n.updatedAt})
+		clearNotifMarked(state, n.id)
+		queued++
 	}
-	state.PendingArchive[opID] = pendingArchiveOp{
-		notifID:  confirm.notifID,
-		ref:      confirm.ref,
-		threadID: confirm.threadID,
-		from:     confirm.from,
-	}
-	*effects = append(*effects, ArchiveNotificationEffect{OpID: opID, ThreadID: confirm.threadID, UpdatedAt: n.updatedAt})
+	clearArchiveActedMarks(state, confirm.from)
 	closeArchiveConfirm(state)
+	if queued == 0 {
+		state.Status = "notification no longer available"
+		return
+	}
 	state.Status = "archiving notification..."
+}
+
+func clearArchiveActedMarks(state *AppState, from focusColumn) {
+	if state == nil {
+		return
+	}
+	if from == focusTimeline || from == focusDetail {
+		delete(state.MarkedTimelineByRef, state.CurrentRef)
+	}
+	if from == focusThread {
+		delete(state.MarkedThreadByRef, state.CurrentRef)
+	}
+}
+
+func clearAllMarks(state *AppState) bool {
+	if state == nil {
+		return false
+	}
+	cleared := false
+	if len(state.MarkedNotifications) > 0 {
+		state.MarkedNotifications = make(map[string]bool)
+		cleared = true
+	}
+	if len(state.MarkedTimelineByRef) > 0 {
+		state.MarkedTimelineByRef = make(map[string]map[string]bool)
+		cleared = true
+	}
+	if len(state.MarkedThreadByRef) > 0 {
+		state.MarkedThreadByRef = make(map[string]map[string]bool)
+		cleared = true
+	}
+	return cleared
 }
 
 func hasPendingArchiveForNotif(state AppState, notifID string) bool {
@@ -2616,22 +3187,49 @@ func hasPendingArchiveForNotif(state AppState, notifID string) bool {
 	return false
 }
 
-func archiveTargetNotification(state AppState) (notifRow, bool) {
+func archiveTargetNotifications(state AppState) []notifRow {
 	if state.Focus == focusNotifications {
+		marked := markedNotificationTargets(state)
+		if len(marked) > 0 {
+			return marked
+		}
 		n := state.selectedNotification()
 		if n == nil {
-			return notifRow{}, false
+			return nil
 		}
-		return *n, true
+		return []notifRow{*n}
+	}
+	if state.Focus == focusTimeline || state.Focus == focusThread || state.Focus == focusDetail {
+		if state.Focus == focusTimeline || state.Focus == focusDetail {
+			if len(markedTimelineRowsForCurrentRef(state)) > 0 {
+				if n, ok := notificationForRef(state, state.CurrentRef); ok {
+					return []notifRow{n}
+				}
+			}
+		}
+		if state.Focus == focusThread {
+			if len(markedThreadRowsForCurrentRef(state)) > 0 {
+				if n, ok := notificationForRef(state, state.CurrentRef); ok {
+					return []notifRow{n}
+				}
+			}
+		}
 	}
 	if state.CurrentRef == "" {
-		return notifRow{}, false
+		return nil
 	}
-	if n, ok := notificationByID(state, state.SelectedNotif); ok && n.ref == state.CurrentRef {
+	if n, ok := notificationForRef(state, state.CurrentRef); ok {
+		return []notifRow{n}
+	}
+	return nil
+}
+
+func notificationForRef(state AppState, ref string) (notifRow, bool) {
+	if n, ok := notificationByID(state, state.SelectedNotif); ok && n.ref == ref {
 		return n, true
 	}
 	for _, n := range state.Notifications {
-		if n.ref == state.CurrentRef {
+		if n.ref == ref {
 			return n, true
 		}
 	}
@@ -2670,6 +3268,7 @@ func removeNotificationByID(state *AppState, effects *[]Effect, id string) {
 	archived := state.Notifications[idx]
 	state.Notifications = append(state.Notifications[:idx], state.Notifications[idx+1:]...)
 	state.rebuildNotifIndex()
+	clearNotifMarked(state, archived.id)
 	if state.notifMarkerByRef != nil {
 		delete(state.notifMarkerByRef, archived.ref)
 	}

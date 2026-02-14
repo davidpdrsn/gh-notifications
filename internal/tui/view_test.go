@@ -718,7 +718,7 @@ func TestSelectedUnreadTimelineRowKeepsSelectionBackgroundOnMarker(t *testing.T)
 func TestSelectedUnreadNotificationRowKeepsMarkerAndSelectedTimestampStyling(t *testing.T) {
 	m := newModel(context.Background(), nil, nil)
 	line := " ●  1h owner/repo  Add support for marker styling"
-	out := m.renderNotificationStyledLine(line, 70, 8, true)
+	out := m.renderNotificationStyledLine(line, 70, 8, false, true)
 
 	if !strings.Contains(out, m.styles.unreadSelected.Render(" ●  ")) {
 		t.Fatalf("expected selected unread marker style, got %q", out)
@@ -739,10 +739,20 @@ func TestSelectedUnreadNotificationRowKeepsMarkerAndSelectedTimestampStyling(t *
 func TestSelectedPartialNotificationRowKeepsMarkerStyling(t *testing.T) {
 	m := newModel(context.Background(), nil, nil)
 	line := " ◐  1h owner/repo  Partial read state"
-	out := m.renderNotificationStyledLine(line, 70, 8, true)
+	out := m.renderNotificationStyledLine(line, 70, 8, false, true)
 
 	if !strings.Contains(out, m.styles.unreadSelected.Render(" ◐  ")) {
 		t.Fatalf("expected selected partial marker style, got %q", out)
+	}
+}
+
+func TestCurrentNotificationRowUsesCurrentBackgroundStyling(t *testing.T) {
+	m := newModel(context.Background(), nil, nil)
+	line := " ●  1h owner/repo  Current row"
+	out := m.renderNotificationStyledLine(line, 70, 8, true, false)
+
+	if !strings.Contains(out, m.styles.unreadCurrent.Render(" ●  ")) {
+		t.Fatalf("expected current unread marker style, got %q", out)
 	}
 }
 

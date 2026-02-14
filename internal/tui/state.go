@@ -163,6 +163,9 @@ type AppState struct {
 	notifMarkerByRef            map[string]string
 	ArchiveConfirm              *archiveConfirmState
 	HelpOpen                    bool
+	MarkedNotifications         map[string]bool
+	MarkedTimelineByRef         map[string]map[string]bool
+	MarkedThreadByRef           map[string]map[string]bool
 }
 
 type pendingReadOp struct {
@@ -189,6 +192,7 @@ type pendingArchiveOp struct {
 
 type archiveConfirmState struct {
 	notifID  string
+	notifIDs []string
 	ref      string
 	threadID string
 	from     focusColumn
@@ -213,6 +217,9 @@ func NewState() AppState {
 		ParentReadLoadInFlightByRef: make(map[string]bool),
 		ReadThroughIDs:              make(map[string]bool),
 		notifMarkerByRef:            make(map[string]string),
+		MarkedNotifications:         make(map[string]bool),
+		MarkedTimelineByRef:         make(map[string]map[string]bool),
+		MarkedThreadByRef:           make(map[string]map[string]bool),
 	}
 }
 

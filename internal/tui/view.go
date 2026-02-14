@@ -83,6 +83,8 @@ func (m *model) renderHelpModal() string {
 	actions := m.renderHelpBindingSection("Actions", []helpBinding{
 		{key: "o", desc: "open selected item in browser"},
 		{key: "r", desc: "toggle read state"},
+		{key: "space", desc: "mark/unmark row and move down"},
+		{key: "shift+a", desc: "mark/unmark all in current list"},
 		{key: "a", desc: "archive notification (a then a confirms)"},
 		{key: "C", desc: "copy focused column"},
 	})
@@ -263,17 +265,19 @@ func (m *model) renderNotifications(width, height int) string {
 		}
 		titleIndent := strings.Repeat(" ", indentWidth)
 		wrapped := wrapDisplayWidth(label, avail, titleIndent)
-		if i == selected {
+		marked := m.state.MarkedNotifications[n.id]
+		current := i == selected
+		if current {
 			selectedRow = i
 		}
-		if i == selected {
+		if current || marked {
 			for _, seg := range wrapped {
-				lines = append(lines, m.renderNotificationStyledLine(seg, avail, timeColWidth+5, true))
+				lines = append(lines, m.renderNotificationStyledLine(seg, avail, timeColWidth+5, current, marked))
 				rowIndexByLine = append(rowIndexByLine, i)
 			}
 		} else {
 			for _, seg := range wrapped {
-				lines = append(lines, m.renderNotificationStyledLine(seg, avail, timeColWidth+5, false))
+				lines = append(lines, m.renderNotificationStyledLine(seg, avail, timeColWidth+5, false, false))
 				rowIndexByLine = append(rowIndexByLine, i)
 			}
 		}
@@ -391,20 +395,28 @@ func renderNotificationTimestamp(line string, width int, style lipgloss.Style) s
 	return style.Render(prefix) + rest
 }
 
-func (m *model) renderNotificationStyledLine(line string, width int, timeWidth int, selected bool) string {
+func (m *model) renderNotificationStyledLine(line string, width int, timeWidth int, current bool, marked bool) string {
 	if width < 1 {
 		width = 1
 	}
 	padded := padToDisplayWidth(line, width)
 	prefix, rest := splitAtDisplayWidth(padded, timeWidth)
 
-	if selected {
+	if marked {
 		if marker, remainder, ok := splitUnreadMarkerPrefix(prefix); ok {
 			return m.styles.unreadSelected.Render(marker) +
 				m.styles.selectedMuted.Render(remainder) +
 				m.styles.selected.Render(rest)
 		}
 		return m.styles.selectedMuted.Render(prefix) + m.styles.selected.Render(rest)
+	}
+	if current {
+		if marker, remainder, ok := splitUnreadMarkerPrefix(prefix); ok {
+			return m.styles.unreadCurrent.Render(marker) +
+				m.styles.currentMuted.Render(remainder) +
+				m.styles.current.Render(rest)
+		}
+		return m.styles.currentMuted.Render(prefix) + m.styles.current.Render(rest)
 	}
 
 	if marker, remainder, ok := splitUnreadMarkerPrefix(prefix); ok {
@@ -454,17 +466,19 @@ func (m *model) renderTimeline(width, height int) string {
 		leadWidth := timeWidth + 2 + kindWidth
 		for _, row := range plan.rows {
 			isRead := ts.rowRead(rows[row.index])
-			if highlightSelection && row.selected {
+			marked := m.state.MarkedTimelineByRef[m.state.CurrentRef][rows[row.index].id]
+			current := highlightSelection && row.selected && !marked
+			if current || marked {
 				wrapped := row.lines
 				style := m.styleForTimelineRow(ts, rows[row.index])
 				for _, seg := range wrapped {
-					lines = append(lines, m.renderTimelineStyledLine(style, seg, plan.avail, true, leadWidth, isRead))
+					lines = append(lines, m.renderTimelineStyledLine(style, seg, plan.avail, current, marked, leadWidth, isRead))
 					rowIndexByLine = append(rowIndexByLine, row.index)
 				}
 			} else {
 				style := m.styleForTimelineRow(ts, rows[row.index])
 				for _, seg := range row.lines {
-					lines = append(lines, m.renderTimelineStyledLine(style, seg, plan.avail, false, leadWidth, isRead))
+					lines = append(lines, m.renderTimelineStyledLine(style, seg, plan.avail, false, false, leadWidth, isRead))
 					rowIndexByLine = append(rowIndexByLine, row.index)
 				}
 			}
@@ -520,16 +534,18 @@ func (m *model) renderThread(width, height int) string {
 				if i == ts.threadSelectedIndex {
 					selectedRow = i
 				}
-				if highlightSelection && i == ts.threadSelectedIndex {
+				marked := m.state.MarkedThreadByRef[m.state.CurrentRef][rows[i].id]
+				current := highlightSelection && i == ts.threadSelectedIndex && !marked
+				if current || marked {
 					style := m.styleForTimelineRow(ts, rows[i])
 					for _, seg := range wrapped {
-						lines = append(lines, m.renderTimelineStyledLine(style, seg, avail, true, 0, isRead))
+						lines = append(lines, m.renderTimelineStyledLine(style, seg, avail, current, marked, 0, isRead))
 						rowIndexByLine = append(rowIndexByLine, i)
 					}
 				} else {
 					style := m.styleForTimelineRow(ts, rows[i])
 					for _, seg := range wrapped {
-						lines = append(lines, m.renderTimelineStyledLine(style, seg, avail, false, 0, isRead))
+						lines = append(lines, m.renderTimelineStyledLine(style, seg, avail, false, false, 0, isRead))
 						rowIndexByLine = append(rowIndexByLine, i)
 					}
 				}
@@ -594,7 +610,7 @@ func (m *model) styleForTimelineRow(ts *timelineState, row displayTimelineRow) l
 	}
 }
 
-func (m *model) renderTimelineStyledLine(base lipgloss.Style, line string, width int, selected bool, kindWidth int, read bool) string {
+func (m *model) renderTimelineStyledLine(base lipgloss.Style, line string, width int, current bool, marked bool, kindWidth int, read bool) string {
 	if width < 1 {
 		width = 1
 	}
@@ -602,11 +618,17 @@ func (m *model) renderTimelineStyledLine(base lipgloss.Style, line string, width
 	renderRest := func(rest string) string {
 		if kindWidth > 0 {
 			kindCol, tail := splitAtExactDisplayWidth(rest, kindWidth)
-			if selected {
+			if marked {
 				if read {
 					return m.styles.selected.Render(base.Render(kindCol)) + m.styles.selectedMuted.Render(tail)
 				}
 				return m.styles.selected.Render(base.Render(kindCol)) + m.styles.selected.Render(tail)
+			}
+			if current {
+				if read {
+					return m.styles.current.Render(base.Render(kindCol)) + m.styles.currentMuted.Render(tail)
+				}
+				return m.styles.current.Render(base.Render(kindCol)) + m.styles.current.Render(tail)
 			}
 			if read {
 				return base.Render(kindCol) + m.styles.muted.Render(tail)
@@ -614,11 +636,17 @@ func (m *model) renderTimelineStyledLine(base lipgloss.Style, line string, width
 			return base.Render(kindCol) + tail
 		}
 
-		if selected {
+		if marked {
 			if read {
 				return m.styles.selectedMuted.Render(rest)
 			}
 			return m.styles.selected.Render(base.Render(rest))
+		}
+		if current {
+			if read {
+				return m.styles.currentMuted.Render(rest)
+			}
+			return m.styles.current.Render(base.Render(rest))
 		}
 		if read {
 			return m.styles.muted.Render(rest)
@@ -627,8 +655,11 @@ func (m *model) renderTimelineStyledLine(base lipgloss.Style, line string, width
 	}
 
 	if marker, rest, ok := splitUnreadMarkerPrefix(padded); ok {
-		if selected {
+		if marked {
 			return m.styles.unreadSelected.Render(marker) + renderRest(rest)
+		}
+		if current {
+			return m.styles.unreadCurrent.Render(marker) + renderRest(rest)
 		}
 		return m.styles.unreadMarker.Render(marker) + renderRest(rest)
 	}

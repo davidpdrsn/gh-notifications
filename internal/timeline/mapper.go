@@ -37,7 +37,8 @@ var ignoredPRTimelineEvents = map[string]struct{}{
 }
 
 var ignoredTimelineEvents = map[string]struct{}{
-	"unsubscribed": {},
+	"unsubscribed":     {},
+	"cross-referenced": {},
 }
 
 func Build(pr github.PullRequest, rawItems []github.TimelineItem) ([]timelineapi.Event, []string) {

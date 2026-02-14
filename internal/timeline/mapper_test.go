@@ -111,8 +111,8 @@ func TestBuildWithComments_StableNonEmptyIDs(t *testing.T) {
 }
 
 func TestMapOne_FallbackIDStableAcrossJSONKeyOrder(t *testing.T) {
-	raw1 := []byte(`{"event":"cross-referenced","created_at":"2024-01-02T03:06:00Z","actor":{"login":"bob","id":22},"source":{"issue":{"id":991,"number":7}}}`)
-	raw2 := []byte(`{"source":{"issue":{"number":7,"id":991}},"actor":{"id":22,"login":"bob"},"created_at":"2024-01-02T03:06:00Z","event":"cross-referenced"}`)
+	raw1 := []byte(`{"event":"commented","created_at":"2024-01-02T03:06:00Z","actor":{"login":"bob","id":22},"body":"hello"}`)
+	raw2 := []byte(`{"actor":{"id":22,"login":"bob"},"body":"hello","created_at":"2024-01-02T03:06:00Z","event":"commented"}`)
 
 	e1, w1, ok1 := MapTimelineItem(raw1)
 	e2, w2, ok2 := MapTimelineItem(raw2)
@@ -128,6 +128,18 @@ func TestMapOne_FallbackIDStableAcrossJSONKeyOrder(t *testing.T) {
 	}
 	if e1.Id != e2.Id {
 		t.Fatalf("fallback id changed with key order: %q vs %q", e1.Id, e2.Id)
+	}
+}
+
+func TestMapTimelineItem_CrossReferencedIsIgnored(t *testing.T) {
+	raw := []byte(`{"id":999,"event":"cross-referenced","created_at":"2024-01-02T03:06:00Z"}`)
+
+	_, w, ok := MapTimelineItem(raw)
+	if w != "" {
+		t.Fatalf("expected no warning for ignored cross-referenced event, got %q", w)
+	}
+	if ok {
+		t.Fatalf("expected cross-referenced event to be ignored")
 	}
 }
 

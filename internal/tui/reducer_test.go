@@ -2657,3 +2657,285 @@ func TestHelpPopupClosesWithEsc(t *testing.T) {
 		t.Fatalf("expected no effects when closing help, got %d", len(effects))
 	}
 }
+
+func TestSpaceMarksNotificationAndMovesDownWithoutWrap(t *testing.T) {
+	state := NewState()
+	state.Focus = focusNotifications
+	state.Notifications = []notifRow{
+		{id: "1", repo: "o/r", ref: "o/r#1", title: "one", updatedAt: time.Now().UTC()},
+		{id: "2", repo: "o/r", ref: "o/r#2", title: "two", updatedAt: time.Now().UTC().Add(-time.Minute)},
+	}
+	state.rebuildNotifIndex()
+	state.SelectedNotif = "1"
+	state.NotifSelected = 0
+	state.CurrentRef = "o/r#1"
+
+	next, _ := Reduce(state, KeyEvent{Key: " "})
+	if !next.MarkedNotifications["1"] {
+		t.Fatalf("expected first notification marked")
+	}
+	if next.SelectedNotif != "2" {
+		t.Fatalf("expected selection to move down to second notification, got %q", next.SelectedNotif)
+	}
+
+	next, _ = Reduce(next, KeyEvent{Key: " "})
+	if !next.MarkedNotifications["2"] {
+		t.Fatalf("expected second notification marked")
+	}
+	if next.SelectedNotif != "2" {
+		t.Fatalf("expected selection to stay at bottom, got %q", next.SelectedNotif)
+	}
+}
+
+func TestReadUsesMarkedNotificationsAndClearsMarks(t *testing.T) {
+	state := NewState()
+	state.Focus = focusNotifications
+	state.Notifications = []notifRow{{id: "1", repo: "o/r", ref: "o/r#1", title: "one", updatedAt: time.Now().UTC()}}
+	state.rebuildNotifIndex()
+	state.SelectedNotif = "1"
+	state.NotifSelected = 0
+	state.CurrentRef = "o/r#1"
+	state.MarkedNotifications["1"] = true
+	ts := &timelineState{
+		ref:                "o/r#1",
+		rowIndexByID:       map[string]int{},
+		threadByID:         map[string]*threadGroup{},
+		expandedThreads:    map[string]bool{},
+		readByEventID:      map[string]bool{"e1": false},
+		readKnownByEventID: map[string]bool{"e1": true},
+		readLoadInFlight:   map[string]bool{},
+	}
+	state.TimelineByRef["o/r#1"] = ts
+	body := "body"
+	ts.insertTimelineEvent(ghpr.TimelineEvent{ID: "e1", Type: "github.timeline.commented", OccurredAt: time.Now().UTC(), Comment: &ghpr.CommentContext{Body: &body}})
+
+	next, effects := Reduce(state, KeyEvent{Key: "r"})
+	if next.MarkedNotifications["1"] {
+		t.Fatalf("expected mark to clear after read action")
+	}
+	found := false
+	for _, eff := range effects {
+		if e, ok := eff.(PersistReadStateEffect); ok && e.Ref == "o/r#1" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected persist read effect for marked notification")
+	}
+}
+
+func TestArchiveUsesMarkedNotificationsAndClearsMarks(t *testing.T) {
+	state := NewState()
+	state.Focus = focusNotifications
+	state.Notifications = []notifRow{
+		{id: "1", repo: "o/r", ref: "o/r#1", title: "one", updatedAt: time.Now().UTC()},
+		{id: "2", repo: "o/r", ref: "o/r#2", title: "two", updatedAt: time.Now().UTC().Add(-time.Minute)},
+	}
+	state.rebuildNotifIndex()
+	state.SelectedNotif = "1"
+	state.NotifSelected = 0
+	state.CurrentRef = "o/r#1"
+	state.MarkedNotifications["1"] = true
+	state.MarkedNotifications["2"] = true
+
+	next, _ := Reduce(state, KeyEvent{Key: "a"})
+	next, effects := Reduce(next, KeyEvent{Key: "a"})
+	if next.MarkedNotifications["1"] || next.MarkedNotifications["2"] {
+		t.Fatalf("expected marks to clear after archive action")
+	}
+	count := 0
+	for _, eff := range effects {
+		if _, ok := eff.(ArchiveNotificationEffect); ok {
+			count++
+		}
+	}
+	if count != 2 {
+		t.Fatalf("expected archive effects for both marked notifications, got %d", count)
+	}
+}
+
+func TestSpaceMarksTimelineAndThreadRowsAndMovesDown(t *testing.T) {
+	state := NewState()
+	state.Focus = focusTimeline
+	state.Notifications = []notifRow{{id: "1", repo: "o/r", ref: "o/r#1", title: "one", updatedAt: time.Now().UTC()}}
+	state.rebuildNotifIndex()
+	state.SelectedNotif = "1"
+	state.CurrentRef = "o/r#1"
+	ts := &timelineState{
+		ref:                "o/r#1",
+		rowIndexByID:       map[string]int{},
+		threadByID:         map[string]*threadGroup{},
+		expandedThreads:    map[string]bool{},
+		readByEventID:      map[string]bool{},
+		readKnownByEventID: map[string]bool{},
+		readLoadInFlight:   map[string]bool{},
+	}
+	state.TimelineByRef["o/r#1"] = ts
+	body := "body"
+	ts.insertTimelineEvent(ghpr.TimelineEvent{ID: "e1", Type: "github.timeline.commented", OccurredAt: time.Now().UTC(), Comment: &ghpr.CommentContext{Body: &body}})
+	ts.insertTimelineEvent(ghpr.TimelineEvent{ID: "e2", Type: "github.timeline.commented", OccurredAt: time.Now().UTC().Add(time.Minute), Comment: &ghpr.CommentContext{Body: &body}})
+	ts.selectedID = eventRowID("e1")
+	ts.selectedIndex = 0
+
+	next, _ := Reduce(state, KeyEvent{Key: " "})
+	if !next.MarkedTimelineByRef["o/r#1"][eventRowID("e1")] {
+		t.Fatalf("expected first timeline row marked")
+	}
+	if next.TimelineByRef["o/r#1"].selectedID != eventRowID("e2") {
+		t.Fatalf("expected timeline selection moved down")
+	}
+
+	next.Focus = focusThread
+	next.TimelineByRef["o/r#1"].activeThreadID = "t1"
+	threadID := "t1"
+	next.TimelineByRef["o/r#1"].insertTimelineEvent(ghpr.TimelineEvent{ID: "c1", Type: "github.review_comment", OccurredAt: time.Now().UTC(), Comment: &ghpr.CommentContext{ThreadID: &threadID, Body: &body}})
+	next.TimelineByRef["o/r#1"].insertTimelineEvent(ghpr.TimelineEvent{ID: "c2", Type: "github.review_comment", OccurredAt: time.Now().UTC().Add(2 * time.Minute), Comment: &ghpr.CommentContext{ThreadID: &threadID, Body: &body}})
+	rows := next.TimelineByRef["o/r#1"].rowsReadyForDisplay(next.TimelineByRef["o/r#1"].threadRows(threadID, false))
+	next.TimelineByRef["o/r#1"].threadSelectedID = rows[0].id
+	next.TimelineByRef["o/r#1"].threadSelectedIndex = 0
+
+	next, _ = Reduce(next, KeyEvent{Key: " "})
+	if !next.MarkedThreadByRef["o/r#1"][rows[0].id] {
+		t.Fatalf("expected thread row marked")
+	}
+	if next.TimelineByRef["o/r#1"].threadSelectedID == rows[0].id {
+		t.Fatalf("expected thread selection moved down")
+	}
+}
+
+func TestEscClearsAllMarks(t *testing.T) {
+	state := NewState()
+	state.MarkedNotifications["n1"] = true
+	state.MarkedTimelineByRef["o/r#1"] = map[string]bool{eventRowID("e1"): true}
+	state.MarkedThreadByRef["o/r#1"] = map[string]bool{threadChildID("t1", "c1"): true}
+
+	next, effects := Reduce(state, KeyEvent{Key: "esc"})
+
+	if len(next.MarkedNotifications) != 0 {
+		t.Fatalf("expected notification marks to be cleared")
+	}
+	if len(next.MarkedTimelineByRef) != 0 {
+		t.Fatalf("expected timeline marks to be cleared")
+	}
+	if len(next.MarkedThreadByRef) != 0 {
+		t.Fatalf("expected thread marks to be cleared")
+	}
+	if next.Status != "cleared marks" {
+		t.Fatalf("expected status to indicate marks were cleared, got %q", next.Status)
+	}
+	if len(effects) != 0 {
+		t.Fatalf("expected no effects, got %d", len(effects))
+	}
+}
+
+func TestChangingColumnClearsAllMarks(t *testing.T) {
+	state := NewState()
+	state.Focus = focusNotifications
+	state.Notifications = []notifRow{{id: "n1", repo: "o/r", ref: "o/r#1", title: "one", updatedAt: time.Now().UTC()}}
+	state.rebuildNotifIndex()
+	state.SelectedNotif = "n1"
+	state.NotifSelected = 0
+	state.CurrentRef = "o/r#1"
+	state.MarkedNotifications["n1"] = true
+	state.MarkedTimelineByRef["o/r#1"] = map[string]bool{eventRowID("e1"): true}
+	state.MarkedThreadByRef["o/r#1"] = map[string]bool{threadChildID("t1", "c1"): true}
+
+	next, _ := Reduce(state, KeyEvent{Key: "l"})
+
+	if next.Focus != focusTimeline {
+		t.Fatalf("expected focus to change to timeline, got %v", next.Focus)
+	}
+	if len(next.MarkedNotifications) != 0 || len(next.MarkedTimelineByRef) != 0 || len(next.MarkedThreadByRef) != 0 {
+		t.Fatalf("expected all marks to clear when changing column")
+	}
+}
+
+func TestShiftAMarksAndUnmarksAllInCurrentNotificationsView(t *testing.T) {
+	state := NewState()
+	state.Focus = focusNotifications
+	state.Notifications = []notifRow{
+		{id: "n1", repo: "o/r", ref: "o/r#1", title: "one", updatedAt: time.Now().UTC()},
+		{id: "n2", repo: "o/r", ref: "o/r#2", title: "two", updatedAt: time.Now().UTC().Add(-time.Minute)},
+	}
+	state.rebuildNotifIndex()
+	state.SelectedNotif = "n1"
+	state.CurrentRef = "o/r#1"
+
+	next, _ := Reduce(state, KeyEvent{Key: "A"})
+	if !next.MarkedNotifications["n1"] || !next.MarkedNotifications["n2"] {
+		t.Fatalf("expected all visible notifications to be marked")
+	}
+
+	next, _ = Reduce(next, KeyEvent{Key: "A"})
+	if len(next.MarkedNotifications) != 0 {
+		t.Fatalf("expected all visible notifications to be unmarked")
+	}
+}
+
+func TestShiftAMarksAndUnmarksAllInTimelineView(t *testing.T) {
+	state := NewState()
+	state.Focus = focusTimeline
+	state.Notifications = []notifRow{{id: "n1", repo: "o/r", ref: "o/r#1", title: "one", updatedAt: time.Now().UTC()}}
+	state.rebuildNotifIndex()
+	state.SelectedNotif = "n1"
+	state.CurrentRef = "o/r#1"
+	ts := &timelineState{
+		ref:                "o/r#1",
+		rowIndexByID:       map[string]int{},
+		threadByID:         map[string]*threadGroup{},
+		expandedThreads:    map[string]bool{},
+		readByEventID:      map[string]bool{},
+		readKnownByEventID: map[string]bool{},
+		readLoadInFlight:   map[string]bool{},
+	}
+	state.TimelineByRef["o/r#1"] = ts
+	body := "body"
+	ts.insertTimelineEvent(ghpr.TimelineEvent{ID: "e1", Type: "github.timeline.commented", OccurredAt: time.Now().UTC(), Comment: &ghpr.CommentContext{Body: &body}})
+	ts.insertTimelineEvent(ghpr.TimelineEvent{ID: "e2", Type: "github.timeline.commented", OccurredAt: time.Now().UTC().Add(time.Minute), Comment: &ghpr.CommentContext{Body: &body}})
+
+	next, _ := Reduce(state, KeyEvent{Key: "A"})
+	marked := next.MarkedTimelineByRef["o/r#1"]
+	if len(marked) != 2 {
+		t.Fatalf("expected all timeline rows to be marked, got %d", len(marked))
+	}
+
+	next, _ = Reduce(next, KeyEvent{Key: "A"})
+	if len(next.MarkedTimelineByRef["o/r#1"]) != 0 {
+		t.Fatalf("expected all timeline rows to be unmarked")
+	}
+}
+
+func TestShiftAMarksAndUnmarksAllInThreadView(t *testing.T) {
+	state := NewState()
+	state.Focus = focusThread
+	state.Notifications = []notifRow{{id: "n1", repo: "o/r", ref: "o/r#1", title: "one", updatedAt: time.Now().UTC()}}
+	state.rebuildNotifIndex()
+	state.SelectedNotif = "n1"
+	state.CurrentRef = "o/r#1"
+	ts := &timelineState{
+		ref:                "o/r#1",
+		rowIndexByID:       map[string]int{},
+		threadByID:         map[string]*threadGroup{},
+		expandedThreads:    map[string]bool{},
+		readByEventID:      map[string]bool{},
+		readKnownByEventID: map[string]bool{},
+		readLoadInFlight:   map[string]bool{},
+	}
+	state.TimelineByRef["o/r#1"] = ts
+	body := "body"
+	threadID := "t1"
+	ts.insertTimelineEvent(ghpr.TimelineEvent{ID: "c1", Type: "github.review_comment", OccurredAt: time.Now().UTC(), Comment: &ghpr.CommentContext{ThreadID: &threadID, Body: &body}})
+	ts.insertTimelineEvent(ghpr.TimelineEvent{ID: "c2", Type: "github.review_comment", OccurredAt: time.Now().UTC().Add(time.Minute), Comment: &ghpr.CommentContext{ThreadID: &threadID, Body: &body}})
+	ts.activeThreadID = threadID
+
+	next, _ := Reduce(state, KeyEvent{Key: "A"})
+	marked := next.MarkedThreadByRef["o/r#1"]
+	if len(marked) != 2 {
+		t.Fatalf("expected all thread rows to be marked, got %d", len(marked))
+	}
+
+	next, _ = Reduce(next, KeyEvent{Key: "A"})
+	if len(next.MarkedThreadByRef["o/r#1"]) != 0 {
+		t.Fatalf("expected all thread rows to be unmarked")
+	}
+}
