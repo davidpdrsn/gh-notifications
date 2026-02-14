@@ -363,7 +363,10 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 			toggleMarkAllInCurrentView(&state)
 		case " ", "space":
 			clearMotionCount(&state)
-			toggleMarkAtSelection(&state, &effects)
+			toggleMarkAtSelection(&state, &effects, 1)
+		case "alt+space", "alt+ ":
+			clearMotionCount(&state)
+			toggleMarkAtSelection(&state, &effects, -1)
 		case "?":
 			clearMotionCount(&state)
 			state.HelpOpen = true
@@ -1119,7 +1122,7 @@ func toggleSelectedRead(state *AppState, effects *[]Effect) {
 	}
 }
 
-func toggleMarkAtSelection(state *AppState, effects *[]Effect) {
+func toggleMarkAtSelection(state *AppState, effects *[]Effect, direction int) {
 	switch state.Focus {
 	case focusNotifications:
 		visible := state.visibleNotifications()
@@ -1131,9 +1134,10 @@ func toggleMarkAtSelection(state *AppState, effects *[]Effect) {
 			return
 		}
 		toggleNotifMarked(state, visible[idx].id)
-		if idx < len(visible)-1 {
-			state.NotifSelected = idx + 1
-			selectNotificationByID(state, effects, visible[idx+1].id)
+		next := idx + direction
+		if next >= 0 && next < len(visible) {
+			state.NotifSelected = next
+			selectNotificationByID(state, effects, visible[next].id)
 			state.DetailScroll = 0
 		}
 	case focusTimeline:
@@ -1150,9 +1154,10 @@ func toggleMarkAtSelection(state *AppState, effects *[]Effect) {
 			return
 		}
 		toggleTimelineMarked(state, state.CurrentRef, rows[idx].id)
-		if idx < len(rows)-1 {
-			ts.selectedID = rows[idx+1].id
-			ts.selectedIndex = idx + 1
+		next := idx + direction
+		if next >= 0 && next < len(rows) {
+			ts.selectedID = rows[next].id
+			ts.selectedIndex = next
 			ensureTimelineSelectionVisible(state, ts)
 			state.DetailScroll = 0
 		}
@@ -1170,9 +1175,10 @@ func toggleMarkAtSelection(state *AppState, effects *[]Effect) {
 			return
 		}
 		toggleThreadMarked(state, state.CurrentRef, rows[idx].id)
-		if idx < len(rows)-1 {
-			ts.threadSelectedID = rows[idx+1].id
-			ts.threadSelectedIndex = idx + 1
+		next := idx + direction
+		if next >= 0 && next < len(rows) {
+			ts.threadSelectedID = rows[next].id
+			ts.threadSelectedIndex = next
 			ensureThreadSelectionVisible(state, ts)
 			state.DetailScroll = 0
 		}

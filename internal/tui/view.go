@@ -84,6 +84,7 @@ func (m *model) renderHelpModal() string {
 		{key: "o", desc: "open selected item in browser"},
 		{key: "r", desc: "toggle read state"},
 		{key: "space", desc: "mark/unmark row and move down"},
+		{key: "alt+space", desc: "mark/unmark row and move up"},
 		{key: "shift+a", desc: "mark/unmark all in current list"},
 		{key: "a", desc: "archive notification (a then a confirms)"},
 		{key: "C", desc: "copy focused column"},

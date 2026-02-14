@@ -2787,6 +2787,35 @@ func TestSpaceMarksNotificationAndMovesDownWithoutWrap(t *testing.T) {
 	}
 }
 
+func TestAltSpaceMarksNotificationAndMovesUpWithoutWrap(t *testing.T) {
+	state := NewState()
+	state.Focus = focusNotifications
+	state.Notifications = []notifRow{
+		{id: "1", repo: "o/r", ref: "o/r#1", title: "one", updatedAt: time.Now().UTC()},
+		{id: "2", repo: "o/r", ref: "o/r#2", title: "two", updatedAt: time.Now().UTC().Add(-time.Minute)},
+	}
+	state.rebuildNotifIndex()
+	state.SelectedNotif = "2"
+	state.NotifSelected = 1
+	state.CurrentRef = "o/r#2"
+
+	next, _ := Reduce(state, KeyEvent{Key: "alt+space"})
+	if !next.MarkedNotifications["2"] {
+		t.Fatalf("expected second notification marked")
+	}
+	if next.SelectedNotif != "1" {
+		t.Fatalf("expected selection to move up to first notification, got %q", next.SelectedNotif)
+	}
+
+	next, _ = Reduce(next, KeyEvent{Key: "alt+space"})
+	if !next.MarkedNotifications["1"] {
+		t.Fatalf("expected first notification marked")
+	}
+	if next.SelectedNotif != "1" {
+		t.Fatalf("expected selection to stay at top, got %q", next.SelectedNotif)
+	}
+}
+
 func TestReadUsesMarkedNotificationsAndClearsMarks(t *testing.T) {
 	state := NewState()
 	state.Focus = focusNotifications
@@ -2890,6 +2919,14 @@ func TestSpaceMarksTimelineAndThreadRowsAndMovesDown(t *testing.T) {
 	threadID := "t1"
 	next.TimelineByRef["o/r#1"].insertTimelineEvent(ghpr.TimelineEvent{ID: "c1", Type: "github.review_comment", OccurredAt: time.Now().UTC(), Comment: &ghpr.CommentContext{ThreadID: &threadID, Body: &body}})
 	next.TimelineByRef["o/r#1"].insertTimelineEvent(ghpr.TimelineEvent{ID: "c2", Type: "github.review_comment", OccurredAt: time.Now().UTC().Add(2 * time.Minute), Comment: &ghpr.CommentContext{ThreadID: &threadID, Body: &body}})
+	timelineRows := next.TimelineByRef["o/r#1"].rowsReadyForDisplay(next.TimelineByRef["o/r#1"].displayRows(false))
+	for i, r := range timelineRows {
+		if r.isThreadHeader && r.threadID == threadID {
+			next.TimelineByRef["o/r#1"].selectedID = r.id
+			next.TimelineByRef["o/r#1"].selectedIndex = i
+			break
+		}
+	}
 	rows := next.TimelineByRef["o/r#1"].rowsReadyForDisplay(next.TimelineByRef["o/r#1"].threadRows(threadID, false))
 	next.TimelineByRef["o/r#1"].threadSelectedID = rows[0].id
 	next.TimelineByRef["o/r#1"].threadSelectedIndex = 0
@@ -2900,6 +2937,67 @@ func TestSpaceMarksTimelineAndThreadRowsAndMovesDown(t *testing.T) {
 	}
 	if next.TimelineByRef["o/r#1"].threadSelectedID == rows[0].id {
 		t.Fatalf("expected thread selection moved down")
+	}
+}
+
+func TestAltSpaceMarksTimelineAndThreadRowsAndMovesUp(t *testing.T) {
+	state := NewState()
+	state.Focus = focusTimeline
+	state.Notifications = []notifRow{{id: "1", repo: "o/r", ref: "o/r#1", title: "one", updatedAt: time.Now().UTC()}}
+	state.rebuildNotifIndex()
+	state.SelectedNotif = "1"
+	state.CurrentRef = "o/r#1"
+	ts := &timelineState{
+		ref:                "o/r#1",
+		rowIndexByID:       map[string]int{},
+		threadByID:         map[string]*threadGroup{},
+		expandedThreads:    map[string]bool{},
+		readByEventID:      map[string]bool{},
+		readKnownByEventID: map[string]bool{},
+		readLoadInFlight:   map[string]bool{},
+	}
+	state.TimelineByRef["o/r#1"] = ts
+	body := "body"
+	ts.insertTimelineEvent(ghpr.TimelineEvent{ID: "e1", Type: "github.timeline.commented", OccurredAt: time.Now().UTC(), Comment: &ghpr.CommentContext{Body: &body}})
+	ts.insertTimelineEvent(ghpr.TimelineEvent{ID: "e2", Type: "github.timeline.commented", OccurredAt: time.Now().UTC().Add(time.Minute), Comment: &ghpr.CommentContext{Body: &body}})
+	ts.selectedID = eventRowID("e2")
+	ts.selectedIndex = 1
+
+	next, _ := Reduce(state, KeyEvent{Key: "alt+space"})
+	if !next.MarkedTimelineByRef["o/r#1"][eventRowID("e2")] {
+		t.Fatalf("expected second timeline row marked")
+	}
+	if next.TimelineByRef["o/r#1"].selectedID != eventRowID("e1") {
+		t.Fatalf("expected timeline selection moved up")
+	}
+
+	next.Focus = focusThread
+	next.TimelineByRef["o/r#1"].activeThreadID = "t1"
+	threadID := "t1"
+	next.TimelineByRef["o/r#1"].insertTimelineEvent(ghpr.TimelineEvent{ID: "c1", Type: "github.review_comment", OccurredAt: time.Now().UTC(), Comment: &ghpr.CommentContext{ThreadID: &threadID, Body: &body}})
+	next.TimelineByRef["o/r#1"].insertTimelineEvent(ghpr.TimelineEvent{ID: "c2", Type: "github.review_comment", OccurredAt: time.Now().UTC().Add(2 * time.Minute), Comment: &ghpr.CommentContext{ThreadID: &threadID, Body: &body}})
+	timelineRows := next.TimelineByRef["o/r#1"].rowsReadyForDisplay(next.TimelineByRef["o/r#1"].displayRows(false))
+	for i, r := range timelineRows {
+		if r.isThreadHeader && r.threadID == threadID {
+			next.TimelineByRef["o/r#1"].selectedID = r.id
+			next.TimelineByRef["o/r#1"].selectedIndex = i
+			break
+		}
+	}
+	rows := next.TimelineByRef["o/r#1"].rowsReadyForDisplay(next.TimelineByRef["o/r#1"].threadRows(threadID, false))
+	if len(rows) < 2 {
+		t.Fatalf("expected at least two thread rows")
+	}
+	startIdx := len(rows) - 1
+	next.TimelineByRef["o/r#1"].threadSelectedID = rows[startIdx].id
+	next.TimelineByRef["o/r#1"].threadSelectedIndex = startIdx
+
+	next, _ = Reduce(next, KeyEvent{Key: "alt+space"})
+	if !next.MarkedThreadByRef["o/r#1"][rows[startIdx].id] {
+		t.Fatalf("expected second thread row marked")
+	}
+	if next.TimelineByRef["o/r#1"].threadSelectedID != rows[startIdx-1].id {
+		t.Fatalf("expected thread selection moved up, got=%q want=%q", next.TimelineByRef["o/r#1"].threadSelectedID, rows[startIdx-1].id)
 	}
 }
 
