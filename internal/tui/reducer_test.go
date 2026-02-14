@@ -1481,6 +1481,125 @@ func TestToggleReadFromNotificationsAdvancesToNextNotification(t *testing.T) {
 	}
 }
 
+func TestOpenKeyFromNotificationsUsesTargetURL(t *testing.T) {
+	state := NewState()
+	state.Focus = focusNotifications
+	state.Notifications = []notifRow{{id: "n1", repo: "o/r", title: "title", kind: "pr", ref: "o/r#42", updatedAt: time.Now().UTC()}}
+	state.rebuildNotifIndex()
+	state.SelectedNotif = "n1"
+	state.NotifSelected = 0
+	state.CurrentRef = "o/r#42"
+	state.TimelineByRef[state.CurrentRef] = &timelineState{
+		ref:                state.CurrentRef,
+		rowIndexByID:       map[string]int{},
+		threadByID:         map[string]*threadGroup{},
+		expandedThreads:    map[string]bool{},
+		readByEventID:      map[string]bool{"e1": false},
+		readKnownByEventID: map[string]bool{"e1": true},
+		readLoadInFlight:   map[string]bool{},
+	}
+	body := "body"
+	state.TimelineByRef[state.CurrentRef].insertTimelineEvent(ghpr.TimelineEvent{ID: "e1", Type: "github.timeline.commented", OccurredAt: time.Now().UTC(), Comment: &ghpr.CommentContext{Body: &body}})
+
+	next, effects := Reduce(state, KeyEvent{Key: "o"})
+
+	if next.Status != "opened in browser" {
+		t.Fatalf("expected open status, got %q", next.Status)
+	}
+	if !next.TimelineByRef[state.CurrentRef].readByEventID["e1"] {
+		t.Fatalf("expected selected notification timeline to be marked read")
+	}
+
+	foundOpen := false
+	foundPersist := false
+	for _, eff := range effects {
+		switch e := eff.(type) {
+		case OpenURLEffect:
+			foundOpen = true
+			if e.URL != "https://github.com/o/r/pull/42" {
+				t.Fatalf("unexpected open URL %q", e.URL)
+			}
+		case PersistReadStateEffect:
+			foundPersist = true
+			if e.Ref != "o/r#42" || !e.Read || len(e.EventIDs) != 1 || e.EventIDs[0] != "e1" {
+				t.Fatalf("unexpected persist payload: %+v", e)
+			}
+		}
+	}
+	if !foundOpen {
+		t.Fatalf("expected OpenURLEffect")
+	}
+	if !foundPersist {
+		t.Fatalf("expected PersistReadStateEffect")
+	}
+}
+
+func TestOpenKeyOnThreadHeaderUsesThreadURL(t *testing.T) {
+	state := NewState()
+	state.Focus = focusTimeline
+	state.CurrentRef = "o/r#1"
+	state.TimelineByRef[state.CurrentRef] = &timelineState{
+		ref:             state.CurrentRef,
+		rowIndexByID:    map[string]int{},
+		threadByID:      map[string]*threadGroup{},
+		expandedThreads: map[string]bool{},
+	}
+	ts := state.TimelineByRef[state.CurrentRef]
+	threadID := "t1"
+	body := "root"
+	url := "https://github.com/o/r/pull/1#discussion_r77"
+	ts.insertTimelineEvent(ghpr.TimelineEvent{ID: "c1", Type: "github.review_comment", OccurredAt: time.Now().UTC(), Comment: &ghpr.CommentContext{ThreadID: &threadID, Body: &body, URL: &url}})
+	ts.selectedID = threadHeaderID(threadID)
+
+	next, effects := Reduce(state, KeyEvent{Key: "o"})
+
+	if next.Status != "opened in browser" {
+		t.Fatalf("expected open status, got %q", next.Status)
+	}
+	if len(effects) != 1 {
+		t.Fatalf("expected 1 effect, got %d", len(effects))
+	}
+	openEff, ok := effects[0].(OpenURLEffect)
+	if !ok {
+		t.Fatalf("expected OpenURLEffect, got %T", effects[0])
+	}
+	if openEff.URL != url {
+		t.Fatalf("expected thread URL %q, got %q", url, openEff.URL)
+	}
+}
+
+func TestOpenKeyFallsBackToCurrentRefURL(t *testing.T) {
+	state := NewState()
+	state.Focus = focusTimeline
+	state.CurrentRef = "o/r#7"
+	state.TimelineByRef[state.CurrentRef] = &timelineState{
+		ref:             state.CurrentRef,
+		rowIndexByID:    map[string]int{},
+		threadByID:      map[string]*threadGroup{},
+		expandedThreads: map[string]bool{},
+	}
+	ts := state.TimelineByRef[state.CurrentRef]
+	issue := ghpr.TimelineEvent{ID: "e0", Type: "issue.opened", OccurredAt: time.Now().UTC(), Issue: &ghpr.IssueOpenedData{Title: "issue"}}
+	ts.insertTimelineEvent(issue)
+	ts.selectedID = eventRowID("e0")
+
+	next, effects := Reduce(state, KeyEvent{Key: "o"})
+
+	if next.Status != "opened in browser" {
+		t.Fatalf("expected open status, got %q", next.Status)
+	}
+	if len(effects) != 1 {
+		t.Fatalf("expected 1 effect, got %d", len(effects))
+	}
+	openEff, ok := effects[0].(OpenURLEffect)
+	if !ok {
+		t.Fatalf("expected OpenURLEffect, got %T", effects[0])
+	}
+	if openEff.URL != "https://github.com/o/r/issues/7" {
+		t.Fatalf("expected issue URL fallback, got %q", openEff.URL)
+	}
+}
+
 func TestHideReadFiltersTimelineAndThreadPane(t *testing.T) {
 	state := NewState()
 	state.Focus = focusTimeline

@@ -91,6 +91,10 @@ type ClipboardCopyFailedEvent struct {
 	Column string
 	Err    string
 }
+type URLOpenFailedEvent struct {
+	URL string
+	Err string
+}
 
 type MouseClickEvent struct {
 	X      int
@@ -128,6 +132,7 @@ func (ForcePushInterdiffLoadedEvent) isEvent() {
 func (ForcePushInterdiffErrEvent) isEvent() {}
 func (ClipboardCopiedEvent) isEvent()       {}
 func (ClipboardCopyFailedEvent) isEvent()   {}
+func (URLOpenFailedEvent) isEvent()         {}
 func (MouseClickEvent) isEvent()            {}
 func (MouseWheelEvent) isEvent()            {}
 func (AutoRefreshTickEvent) isEvent()       {}
@@ -164,6 +169,7 @@ type PersistReadStateEffect struct {
 	EventIDs []string
 	Read     bool
 }
+type OpenURLEffect struct{ URL string }
 type ScheduleAutoRefreshTickEffect struct{}
 type ScheduleRefreshSpinnerTickEffect struct{}
 
@@ -176,6 +182,7 @@ func (StartForcePushInterdiffEffect) isEffect() {
 func (CopyColumnEffect) isEffect()       {}
 func (LoadReadStateEffect) isEffect()    {}
 func (PersistReadStateEffect) isEffect() {}
+func (OpenURLEffect) isEffect()          {}
 func (ScheduleAutoRefreshTickEffect) isEffect() {
 }
 func (ScheduleRefreshSpinnerTickEffect) isEffect() {
@@ -244,6 +251,9 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 				break
 			}
 			effects = append(effects, CopyColumnEffect{Column: column, Text: text})
+		case "o":
+			clearMotionCount(&state)
+			openSelectedInBrowser(&state, &effects)
 		case "down", "j":
 			moveDownN(&state, &effects, count)
 		case "up", "k":
@@ -467,6 +477,8 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 		state.Status = "copied " + e.Column + " column"
 	case ClipboardCopyFailedEvent:
 		state.Status = "copy failed (" + e.Column + "): " + e.Err
+	case URLOpenFailedEvent:
+		state.Status = "open failed: " + e.Err
 	}
 
 	queueSelectedDetailDiff(&state, &effects)
@@ -1871,6 +1883,211 @@ func commitRefreshNotifications(state *AppState) {
 	state.NotifSelected = idx
 	state.SelectedNotif = visible[idx].id
 	state.setCurrentRefFromSelectedNotification()
+}
+
+func openSelectedInBrowser(state *AppState, effects *[]Effect) {
+	if state.Focus == focusNotifications {
+		markSelectedNotificationRead(state, effects)
+	}
+	url := selectedBrowserURL(*state)
+	if strings.TrimSpace(url) == "" {
+		state.Status = "nothing to open"
+		return
+	}
+	*effects = append(*effects, OpenURLEffect{URL: url})
+	state.Status = "opened in browser"
+}
+
+func markSelectedNotificationRead(state *AppState, effects *[]Effect) {
+	n := state.selectedNotification()
+	if n == nil {
+		return
+	}
+	ts := state.TimelineByRef[n.ref]
+	if ts == nil {
+		return
+	}
+	eventIDs := ts.allEventIDs()
+	if len(eventIDs) == 0 {
+		return
+	}
+
+	ensureReadStateMaps(ts)
+	allRead := true
+	for _, id := range eventIDs {
+		if id == "" {
+			continue
+		}
+		if !ts.readByEventID[id] {
+			allRead = false
+			break
+		}
+	}
+	if allRead {
+		return
+	}
+
+	state.NextReadOpID++
+	opID := state.NextReadOpID
+	if state.PendingRead == nil {
+		state.PendingRead = make(map[int64]pendingReadOp)
+	}
+	prevRead := make(map[string]bool, len(eventIDs))
+	prevKnown := make(map[string]bool, len(eventIDs))
+	for _, id := range eventIDs {
+		if id == "" {
+			continue
+		}
+		prevRead[id] = ts.readByEventID[id]
+		prevKnown[id] = ts.readKnownByEventID[id]
+		ts.readByEventID[id] = true
+		ts.readKnownByEventID[id] = true
+	}
+	state.PendingRead[opID] = pendingReadOp{
+		ref:       n.ref,
+		eventIDs:  append([]string(nil), eventIDs...),
+		read:      true,
+		prevRead:  prevRead,
+		prevKnown: prevKnown,
+	}
+	*effects = append(*effects, PersistReadStateEffect{
+		OpID:     opID,
+		Ref:      n.ref,
+		EventIDs: append([]string(nil), eventIDs...),
+		Read:     true,
+	})
+}
+
+func selectedBrowserURL(state AppState) string {
+	if state.Focus == focusNotifications {
+		n := state.selectedNotification()
+		if n == nil {
+			return ""
+		}
+		return refBrowserURL(state, n.ref, n.kind)
+	}
+
+	ts := state.currentTimeline()
+	if ts != nil {
+		if state.Focus == focusThread && ts.activeThreadID != "" {
+			if url := threadBrowserURL(ts, ts.activeThreadID); url != "" {
+				return url
+			}
+			if ev := state.selectedThreadEvent(); ev != nil {
+				if url := timelineEventBrowserURL(*ev, ts); url != "" {
+					return url
+				}
+			}
+		}
+
+		rows := ts.rowsReadyForDisplay(ts.displayRows(state.HideRead))
+		idx := indexOfTimelineSelection(rows, ts.selectedID)
+		if idx >= 0 && idx < len(rows) {
+			row := rows[idx]
+			if row.isThreadHeader {
+				if url := threadBrowserURL(ts, row.threadID); url != "" {
+					return url
+				}
+			}
+			if row.event != nil {
+				if url := timelineEventBrowserURL(*row.event, ts); url != "" {
+					return url
+				}
+			}
+		}
+
+		if ev := state.selectedDetailEvent(); ev != nil {
+			if url := timelineEventBrowserURL(*ev, ts); url != "" {
+				return url
+			}
+		}
+	}
+
+	return refBrowserURL(state, state.CurrentRef, "")
+}
+
+func threadBrowserURL(ts *timelineState, threadID string) string {
+	if ts == nil || threadID == "" {
+		return ""
+	}
+	group := ts.threadByID[threadID]
+	if group == nil || len(group.items) == 0 {
+		return ""
+	}
+	for _, ev := range group.items {
+		if ev.Comment != nil && ev.Comment.URL != nil {
+			url := strings.TrimSpace(*ev.Comment.URL)
+			if url != "" {
+				return url
+			}
+		}
+	}
+	for _, ev := range group.items {
+		if url := timelineEventBrowserURL(ev, ts); url != "" {
+			return url
+		}
+	}
+	return ""
+}
+
+func timelineEventBrowserURL(ev ghpr.TimelineEvent, ts *timelineState) string {
+	if ev.Comment != nil && ev.Comment.URL != nil {
+		if url := strings.TrimSpace(*ev.Comment.URL); url != "" {
+			return url
+		}
+	}
+	if ev.Commit != nil && ev.Commit.URL != nil {
+		if url := strings.TrimSpace(*ev.Commit.URL); url != "" {
+			return url
+		}
+	}
+	if ev.Type == "github.timeline.head_ref_force_pushed" && ts != nil {
+		if info, ok := ts.forcePushByID[ev.ID]; ok {
+			if url := strings.TrimSpace(info.compareURL); url != "" {
+				return url
+			}
+		}
+	}
+	return ""
+}
+
+func refBrowserURL(state AppState, ref, kindHint string) string {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return ""
+	}
+	parsed, err := ghpr.ParseTimelineRef(ref)
+	if err != nil {
+		return ""
+	}
+	kind := strings.ToLower(strings.TrimSpace(kindHint))
+	if kind == "" {
+		kind = strings.ToLower(strings.TrimSpace(parsed.KindHint))
+	}
+	if kind == "" && ref == state.CurrentRef {
+		ts := state.TimelineByRef[ref]
+		if ts != nil {
+			for _, row := range ts.rows {
+				if row.event == nil {
+					continue
+				}
+				switch row.event.Type {
+				case "issue.opened":
+					kind = "issue"
+				case "pr.opened":
+					kind = "pr"
+				}
+				if kind != "" {
+					break
+				}
+			}
+		}
+	}
+
+	if kind == "pr" || kind == "pull" || kind == "pullrequest" {
+		return "https://github.com/" + parsed.Owner + "/" + parsed.Repo + "/pull/" + strconv.Itoa(parsed.Number)
+	}
+	return "https://github.com/" + parsed.Owner + "/" + parsed.Repo + "/issues/" + strconv.Itoa(parsed.Number)
 }
 
 func applyTimelineRefreshSelectionFallback(state *AppState, ts *timelineState, ref string) {

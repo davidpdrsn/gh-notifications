@@ -100,6 +100,11 @@ type clipboardErrMsg struct {
 	err    error
 }
 
+type urlOpenErrMsg struct {
+	url string
+	err error
+}
+
 type autoRefreshTickMsg struct{}
 type refreshSpinnerTickMsg struct{}
 
@@ -172,6 +177,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case clipboardErrMsg:
 		asyncMsg = true
 		events = append(events, ClipboardCopyFailedEvent{Column: t.column, Err: t.err.Error()})
+	case urlOpenErrMsg:
+		asyncMsg = true
+		events = append(events, URLOpenFailedEvent{URL: t.url, Err: t.err.Error()})
 	case autoRefreshTickMsg:
 		asyncMsg = true
 		events = append(events, AutoRefreshTickEvent{})
@@ -230,6 +238,8 @@ func (m *model) applyEffects(effects []Effect) {
 			m.startForcePushInterdiffLoader(e.Ref, e.EventID)
 		case CopyColumnEffect:
 			m.startClipboardCopy(e.Column, e.Text)
+		case OpenURLEffect:
+			m.startOpenURL(e.URL)
 		case LoadReadStateEffect:
 			m.startReadStateLoader(e.Ref, e.EventIDs)
 		case PersistReadStateEffect:
@@ -346,6 +356,14 @@ func (m *model) startClipboardCopy(column, text string) {
 			return
 		}
 		m.msgCh <- clipboardCopiedMsg{column: column}
+	}()
+}
+
+func (m *model) startOpenURL(url string) {
+	go func() {
+		if err := openURL(url); err != nil {
+			m.msgCh <- urlOpenErrMsg{url: url, err: err}
+		}
 	}()
 }
 
