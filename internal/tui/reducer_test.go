@@ -2624,3 +2624,36 @@ func TestArchiveKeyWhileArchivePendingDoesNotOpenModal(t *testing.T) {
 		t.Fatalf("expected no side effects, got %d", len(effects))
 	}
 }
+
+func TestHelpPopupOpensWithQuestionAndClosesWithQuestion(t *testing.T) {
+	state := NewState()
+
+	next, effects := Reduce(state, KeyEvent{Key: "?"})
+	if !next.HelpOpen {
+		t.Fatalf("expected help popup to open")
+	}
+	if len(effects) != 0 {
+		t.Fatalf("expected no effects when opening help, got %d", len(effects))
+	}
+
+	next, effects = Reduce(next, KeyEvent{Key: "?"})
+	if next.HelpOpen {
+		t.Fatalf("expected help popup to close on question mark")
+	}
+	if len(effects) != 0 {
+		t.Fatalf("expected no effects when closing help, got %d", len(effects))
+	}
+}
+
+func TestHelpPopupClosesWithEsc(t *testing.T) {
+	state := NewState()
+	state.HelpOpen = true
+
+	next, effects := Reduce(state, KeyEvent{Key: "esc"})
+	if next.HelpOpen {
+		t.Fatalf("expected help popup to close on esc")
+	}
+	if len(effects) != 0 {
+		t.Fatalf("expected no effects when closing help, got %d", len(effects))
+	}
+}

@@ -162,6 +162,7 @@ type AppState struct {
 	MotionCount                 string
 	notifMarkerByRef            map[string]string
 	ArchiveConfirm              *archiveConfirmState
+	HelpOpen                    bool
 }
 
 type pendingReadOp struct {

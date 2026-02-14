@@ -164,6 +164,24 @@ func TestViewShowsArchiveConfirmationModal(t *testing.T) {
 	}
 }
 
+func TestViewShowsHelpPopup(t *testing.T) {
+	m := newModel(context.Background(), nil, nil)
+	m.state.Width = 100
+	m.state.Height = 28
+	m.state.HelpOpen = true
+
+	out := m.View()
+	if !strings.Contains(out, "Keyboard shortcuts") {
+		t.Fatalf("expected help popup title")
+	}
+	if !strings.Contains(out, "Navigation") {
+		t.Fatalf("expected help popup navigation section")
+	}
+	if !strings.Contains(out, "Press ? or esc to close.") {
+		t.Fatalf("expected help popup dismiss hint")
+	}
+}
+
 func TestOverlayModalCenteredPreservesBackgroundOutsideModal(t *testing.T) {
 	base := strings.Join([]string{
 		"AAAAAAAAAAAAAAAAAAAA",

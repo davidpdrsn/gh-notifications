@@ -112,17 +112,7 @@ func waitForAsyncMsg(ch <-chan tea.Msg) tea.Cmd {
 	}
 }
 
-func (m *model) debugStatus() string {
-	if m.state.ArchiveConfirm != nil {
-		parts := []string{"a confirm", "esc cancel"}
-		return stringsJoin(parts, "   ")
-	}
-	parts := []string{"q", "tab", "h/l", "j/k", "[ / ]", "r", "a", "^r", "H", "o", "^p/^n", "^u/^d", "C"}
-	return stringsJoin(parts, "   ")
-}
-
 func (m *model) bottomStatus() string {
-	left := m.debugStatus()
 	right := ""
 	if m.state.RefreshInFlight {
 		spinnerFrames := []string{"-", "\\", "|", "/"}
@@ -138,9 +128,8 @@ func (m *model) bottomStatus() string {
 		}
 	}
 	if right == "" {
-		return left
+		return ""
 	}
-	leftW := lipgloss.Width(left)
 	rightW := lipgloss.Width(right)
 	avail := m.state.Width - 1
 	if avail < 1 {
@@ -149,17 +138,5 @@ func (m *model) bottomStatus() string {
 	if rightW >= avail {
 		return clampDisplayWidth(right, avail)
 	}
-	if leftW+1+rightW > avail {
-		maxLeft := avail - rightW - 1
-		if maxLeft < 1 {
-			return right
-		}
-		left = clampDisplayWidth(left, maxLeft)
-		leftW = lipgloss.Width(left)
-	}
-	gap := avail - leftW - rightW
-	if gap < 1 {
-		gap = 1
-	}
-	return left + strings.Repeat(" ", gap) + right
+	return right
 }

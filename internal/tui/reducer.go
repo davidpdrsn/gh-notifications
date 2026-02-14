@@ -253,6 +253,17 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 	case MouseClickEvent:
 		return handleMouseClick(&state, &effects, e), effects
 	case KeyEvent:
+		if state.HelpOpen {
+			clearMotionCount(&state)
+			switch e.Key {
+			case "ctrl+c", "q":
+				state.Quit = true
+				effects = append(effects, CancelTimelineEffect{})
+			case "?", "esc":
+				state.HelpOpen = false
+			}
+			break
+		}
 		if state.ArchiveConfirm != nil {
 			clearMotionCount(&state)
 			switch e.Key {
@@ -314,6 +325,9 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 		case "a":
 			clearMotionCount(&state)
 			openArchiveConfirm(&state)
+		case "?":
+			clearMotionCount(&state)
+			state.HelpOpen = true
 		case "down", "j":
 			moveDownN(&state, &effects, count)
 		case "up", "k":

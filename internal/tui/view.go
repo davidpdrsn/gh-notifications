@@ -63,10 +63,76 @@ func (m *model) View() string {
 	}
 	status := m.styles.status.Width(m.state.Width).Render(" " + m.bottomStatus())
 	base := lipgloss.JoinVertical(lipgloss.Left, row, status)
+	if m.state.HelpOpen {
+		return overlayModalCentered(base, m.renderHelpModal(), m.state.Width, m.state.Height)
+	}
 	if m.state.ArchiveConfirm != nil {
 		return overlayModalCentered(base, m.renderArchiveConfirmModal(), m.state.Width, m.state.Height)
 	}
 	return base
+}
+
+func (m *model) renderHelpModal() string {
+	title := m.styles.title.Render("Keyboard shortcuts")
+	navigation := m.renderHelpBindingSection("Navigation", []helpBinding{
+		{key: "j/k, up/down", desc: "move selection"},
+		{key: "h/l, left/right, enter", desc: "drill in / back out"},
+		{key: "[ / ]", desc: "jump top / bottom"},
+		{key: "tab / shift+tab", desc: "cycle notification org tabs"},
+	})
+	actions := m.renderHelpBindingSection("Actions", []helpBinding{
+		{key: "o", desc: "open selected item in browser"},
+		{key: "r", desc: "toggle read state"},
+		{key: "a", desc: "archive notification (a then a confirms)"},
+		{key: "C", desc: "copy focused column"},
+	})
+	view := m.renderHelpBindingSection("View & scroll", []helpBinding{
+		{key: "H", desc: "hide/show read items"},
+		{key: "ctrl+u / ctrl+d", desc: "page up/down"},
+		{key: "ctrl+p / ctrl+n", desc: "scroll detail pane"},
+		{key: "ctrl+r", desc: "refresh now"},
+	})
+
+	content := lipgloss.JoinVertical(
+		lipgloss.Left,
+		title,
+		"",
+		navigation,
+		"",
+		actions,
+		"",
+		view,
+		"",
+		m.styles.muted.Render("Press ? or esc to close."),
+	)
+	box := lipgloss.NewStyle().
+		Border(lipgloss.NormalBorder()).
+		Padding(1, 2).
+		MaxWidth(max(44, m.state.Width-4)).
+		Render(content)
+	return box
+}
+
+type helpBinding struct {
+	key  string
+	desc string
+}
+
+func (m *model) renderHelpBindingSection(title string, bindings []helpBinding) string {
+	keyWidth := 0
+	for _, b := range bindings {
+		if w := lipgloss.Width(b.key); w > keyWidth {
+			keyWidth = w
+		}
+	}
+	lines := make([]string, 0, len(bindings)+1)
+	lines = append(lines, m.styles.secondary.Render(title))
+	for _, b := range bindings {
+		key := padToDisplayWidth(b.key, keyWidth)
+		line := "  " + key + "  " + b.desc
+		lines = append(lines, m.styles.text.Render(line))
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, lines...)
 }
 
 func (m *model) renderArchiveConfirmModal() string {
