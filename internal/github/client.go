@@ -234,7 +234,7 @@ func (c *Client) StreamReviewComments(ctx context.Context, owner, repo string, n
 }
 
 func (c *Client) StreamNotifications(ctx context.Context, onItem func(Notification) error) error {
-	path := "/notifications?per_page=100"
+	path := "/notifications?all=true&per_page=100"
 
 	for path != "" {
 		req, err := c.newRequest(ctx, path)
