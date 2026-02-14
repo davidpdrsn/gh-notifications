@@ -1023,6 +1023,12 @@ func timelineActorColumnWidth(rows []displayTimelineRow) int {
 
 func wrapTimelineRow(row displayTimelineRow, ts *timelineState, maxWidth int, timeWidth int, kindWidth int, actorWidth int, showContent bool) []string {
 	prefix, content, messageOffset := timelineRowPrefixAndContent(row, ts, timeWidth, kindWidth, actorWidth, showContent)
+	if !showContent {
+		if maxWidth < 1 {
+			maxWidth = 1
+		}
+		return []string{clampDisplayWidth(prefix+content, maxWidth)}
+	}
 	indent := ""
 	if messageOffset > 0 {
 		indent = timelineContinuationIndent(row, prefix, messageOffset)

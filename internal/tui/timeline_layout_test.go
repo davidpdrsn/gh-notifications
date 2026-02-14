@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"gh-pr/ghpr"
+
+	"github.com/charmbracelet/lipgloss"
 )
 
 func TestBuildTimelineViewportPlanNormalizesStaleOffset(t *testing.T) {
@@ -95,5 +97,24 @@ func TestBuildTimelineViewportPlanKeepsWrappedSelectedVisible(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected selected wrapped row in viewport plan")
+	}
+}
+
+func TestWrapTimelineRowCollapsedTruncatesInsteadOfWrapping(t *testing.T) {
+	body := "hello"
+	ev := ghpr.TimelineEvent{
+		ID:         "e1",
+		Type:       "github.timeline.commented",
+		OccurredAt: time.Now().UTC(),
+		Comment:    &ghpr.CommentContext{Body: &body},
+	}
+	row := displayTimelineRow{event: &ev}
+
+	lines := wrapTimelineRow(row, nil, 12, 3, 9, 16, false)
+	if len(lines) != 1 {
+		t.Fatalf("expected collapsed timeline row to stay single-line, got %d lines", len(lines))
+	}
+	if got := lipgloss.Width(lines[0]); got > 12 {
+		t.Fatalf("expected collapsed timeline row to be truncated to width <= 12, got %d", got)
 	}
 }
