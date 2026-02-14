@@ -248,6 +248,12 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 			moveDownN(&state, &effects, count)
 		case "up", "k":
 			moveUpN(&state, &effects, count)
+		case "[":
+			clearMotionCount(&state)
+			jumpToTopOfFocusedPane(&state, &effects)
+		case "]":
+			clearMotionCount(&state)
+			jumpToBottomOfFocusedPane(&state, &effects)
 		case "right", "l", "enter":
 			clearMotionCount(&state)
 			drillIn(&state)
@@ -841,6 +847,88 @@ func moveUpN(state *AppState, effects *[]Effect, n int) {
 	}
 	for i := 0; i < n; i++ {
 		moveUp(state, effects)
+	}
+}
+
+func jumpToTopOfFocusedPane(state *AppState, effects *[]Effect) {
+	switch state.Focus {
+	case focusNotifications:
+		visible := state.visibleNotifications()
+		if len(visible) == 0 {
+			return
+		}
+		state.NotifSelected = 0
+		selectNotificationByID(state, effects, visible[0].id)
+	case focusTimeline:
+		ts := state.currentTimeline()
+		if ts == nil {
+			return
+		}
+		rows := ts.rowsReadyForDisplay(ts.displayRows(state.HideRead))
+		if len(rows) == 0 {
+			return
+		}
+		ts.selectedID = rows[0].id
+		ts.selectedIndex = 0
+		ensureTimelineSelectionVisible(state, ts)
+		state.DetailScroll = 0
+	case focusThread:
+		ts := state.currentTimeline()
+		if ts == nil || ts.activeThreadID == "" {
+			return
+		}
+		rows := ts.rowsReadyForDisplay(ts.threadRows(ts.activeThreadID, state.HideRead))
+		if len(rows) == 0 {
+			return
+		}
+		ts.threadSelectedID = rows[0].id
+		ts.threadSelectedIndex = 0
+		ensureThreadSelectionVisible(state, ts)
+		state.DetailScroll = 0
+	case focusDetail:
+		state.DetailScroll = 0
+	}
+}
+
+func jumpToBottomOfFocusedPane(state *AppState, effects *[]Effect) {
+	switch state.Focus {
+	case focusNotifications:
+		visible := state.visibleNotifications()
+		if len(visible) == 0 {
+			return
+		}
+		state.NotifSelected = len(visible) - 1
+		selectNotificationByID(state, effects, visible[len(visible)-1].id)
+	case focusTimeline:
+		ts := state.currentTimeline()
+		if ts == nil {
+			return
+		}
+		rows := ts.rowsReadyForDisplay(ts.displayRows(state.HideRead))
+		if len(rows) == 0 {
+			return
+		}
+		idx := len(rows) - 1
+		ts.selectedID = rows[idx].id
+		ts.selectedIndex = idx
+		ensureTimelineSelectionVisible(state, ts)
+		state.DetailScroll = 0
+	case focusThread:
+		ts := state.currentTimeline()
+		if ts == nil || ts.activeThreadID == "" {
+			return
+		}
+		rows := ts.rowsReadyForDisplay(ts.threadRows(ts.activeThreadID, state.HideRead))
+		if len(rows) == 0 {
+			return
+		}
+		idx := len(rows) - 1
+		ts.threadSelectedID = rows[idx].id
+		ts.threadSelectedIndex = idx
+		ensureThreadSelectionVisible(state, ts)
+		state.DetailScroll = 0
+	case focusDetail:
+		state.DetailScroll = detailMaxScroll(*state)
 	}
 }
 
@@ -1531,22 +1619,32 @@ func normalizeDetail(state *AppState) {
 	if rightW < 1 {
 		return
 	}
+	maxScroll := detailMaxScroll(*state)
+	if state.DetailScroll > maxScroll {
+		state.DetailScroll = maxScroll
+	}
+}
+
+func detailMaxScroll(state AppState) int {
+	mode := state.currentPaneMode()
+	_, _, rightW := paneWidths(panesTotalWidth(state.Width, state.Focus, mode), state.Focus, mode)
+	if rightW < 1 {
+		return 0
+	}
 	avail := contentWidth(rightW)
 	if avail < 1 {
 		avail = 1
 	}
-	viewport := paneInnerHeight(*state)
+	viewport := paneInnerHeight(state)
 	if viewport < 1 {
 		viewport = 1
 	}
-	total := detailWrappedLineCount(*state, avail)
+	total := detailWrappedLineCount(state, avail)
 	maxScroll := total - viewport
 	if maxScroll < 0 {
 		maxScroll = 0
 	}
-	if state.DetailScroll > maxScroll {
-		state.DetailScroll = maxScroll
-	}
+	return maxScroll
 }
 
 func detailWrappedLineCount(state AppState, avail int) int {

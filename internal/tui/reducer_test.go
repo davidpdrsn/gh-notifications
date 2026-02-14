@@ -1743,6 +1743,67 @@ func TestMotionCountPrefixMovesMultipleRows(t *testing.T) {
 	}
 }
 
+func TestBracketKeysJumpToTopAndBottomOfNotificationsPane(t *testing.T) {
+	state := NewState()
+	state.Focus = focusNotifications
+	state.Notifications = []notifRow{
+		{id: "n1", repo: "o/r", ref: "o/r#1", updatedAt: time.Now().UTC()},
+		{id: "n2", repo: "o/r", ref: "o/r#2", updatedAt: time.Now().UTC().Add(-time.Minute)},
+		{id: "n3", repo: "o/r", ref: "o/r#3", updatedAt: time.Now().UTC().Add(-2 * time.Minute)},
+	}
+	state.rebuildNotifIndex()
+	state.SelectedNotif = "n1"
+	state.NotifSelected = 0
+	state.CurrentRef = "o/r#1"
+
+	state, _ = Reduce(state, KeyEvent{Key: "]"})
+	if state.SelectedNotif != "n3" {
+		t.Fatalf("expected ] to jump to last notification, got %q", state.SelectedNotif)
+	}
+	if state.CurrentRef != "o/r#3" {
+		t.Fatalf("expected current ref to follow selection, got %q", state.CurrentRef)
+	}
+
+	state, _ = Reduce(state, KeyEvent{Key: "["})
+	if state.SelectedNotif != "n1" {
+		t.Fatalf("expected [ to jump to first notification, got %q", state.SelectedNotif)
+	}
+	if state.CurrentRef != "o/r#1" {
+		t.Fatalf("expected current ref to follow selection, got %q", state.CurrentRef)
+	}
+}
+
+func TestBracketKeysJumpToTopAndBottomOfDetailPane(t *testing.T) {
+	state := NewState()
+	state.Width = 80
+	state.Height = 12
+	state.Focus = focusDetail
+	state.CurrentRef = "o/r#1"
+	state.TimelineByRef[state.CurrentRef] = &timelineState{
+		ref:                state.CurrentRef,
+		rowIndexByID:       map[string]int{},
+		threadByID:         map[string]*threadGroup{},
+		expandedThreads:    map[string]bool{},
+		readByEventID:      map[string]bool{"e1": false},
+		readKnownByEventID: map[string]bool{"e1": true},
+		readLoadInFlight:   map[string]bool{},
+	}
+	ts := state.TimelineByRef[state.CurrentRef]
+	body := strings.Repeat("long detail line ", 120)
+	ts.insertTimelineEvent(ghpr.TimelineEvent{ID: "e1", Type: "github.timeline.commented", OccurredAt: time.Now().UTC(), Comment: &ghpr.CommentContext{Body: &body}})
+	ts.selectedID = eventRowID("e1")
+
+	next, _ := Reduce(state, KeyEvent{Key: "]"})
+	if next.DetailScroll <= 0 {
+		t.Fatalf("expected ] to jump to bottom of detail pane, got %d", next.DetailScroll)
+	}
+
+	next, _ = Reduce(next, KeyEvent{Key: "["})
+	if next.DetailScroll != 0 {
+		t.Fatalf("expected [ to jump to top of detail pane, got %d", next.DetailScroll)
+	}
+}
+
 func TestCtrlRStartsRefreshCurrentRefFirst(t *testing.T) {
 	state := NewState()
 	state.CurrentRef = "o/r#2"
