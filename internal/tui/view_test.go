@@ -776,6 +776,70 @@ func TestSelectedUnreadTimelineRowKeepsSelectionBackgroundOnMarker(t *testing.T)
 	}
 }
 
+func TestDetailFocusKeepsTimelineCurrentRowVisible(t *testing.T) {
+	m := newModel(context.Background(), nil, nil)
+	m.state.Width = 90
+	m.state.Height = 20
+	m.state.Focus = focusDetail
+	m.state.CurrentRef = "o/r#1"
+	m.state.TimelineByRef[m.state.CurrentRef] = &timelineState{
+		ref:                m.state.CurrentRef,
+		rowIndexByID:       map[string]int{},
+		threadByID:         map[string]*threadGroup{},
+		expandedThreads:    map[string]bool{},
+		readByEventID:      map[string]bool{},
+		readKnownByEventID: map[string]bool{},
+		readLoadInFlight:   map[string]bool{},
+	}
+	ts := m.state.TimelineByRef[m.state.CurrentRef]
+	body := "detail-focus-selection"
+	ts.insertTimelineEvent(ghpr.TimelineEvent{ID: "e1", Type: "github.timeline.commented", OccurredAt: time.Now().UTC(), Comment: &ghpr.CommentContext{Body: &body}})
+	ts.selectedID = eventRowID("e1")
+	ts.selectedIndex = 0
+
+	mode := m.state.currentPaneMode()
+	_, midW, _ := paneWidths(panesTotalWidth(m.state.Width, m.state.Focus, mode), m.state.Focus, mode)
+	out := m.renderTimeline(midW, paneInnerHeight(m.state))
+	if !strings.Contains(out, m.styles.unreadCurrent.Render(" ●  ")) {
+		t.Fatalf("expected timeline current-row marker to remain visible in detail focus, got %q", out)
+	}
+}
+
+func TestDetailFocusKeepsThreadCurrentRowVisible(t *testing.T) {
+	m := newModel(context.Background(), nil, nil)
+	m.state.Width = 90
+	m.state.Height = 20
+	m.state.Focus = focusDetail
+	m.state.CurrentRef = "o/r#1"
+	m.state.TimelineByRef[m.state.CurrentRef] = &timelineState{
+		ref:                m.state.CurrentRef,
+		rowIndexByID:       map[string]int{},
+		threadByID:         map[string]*threadGroup{},
+		expandedThreads:    map[string]bool{},
+		readByEventID:      map[string]bool{},
+		readKnownByEventID: map[string]bool{},
+		readLoadInFlight:   map[string]bool{},
+	}
+	ts := m.state.TimelineByRef[m.state.CurrentRef]
+	threadID := "t1"
+	body := "thread selection"
+	ts.insertTimelineEvent(ghpr.TimelineEvent{ID: "c1", Type: "github.review_comment", OccurredAt: time.Now().UTC(), Comment: &ghpr.CommentContext{ThreadID: &threadID, Body: &body}})
+	ts.activeThreadID = threadID
+	rows := ts.rowsReadyForDisplay(ts.threadRows(threadID, false))
+	if len(rows) == 0 {
+		t.Fatalf("expected thread rows")
+	}
+	ts.threadSelectedID = rows[0].id
+	ts.threadSelectedIndex = 0
+
+	mode := m.state.currentPaneMode()
+	_, midW, _ := paneWidths(panesTotalWidth(m.state.Width, m.state.Focus, mode), m.state.Focus, mode)
+	out := m.renderThread(midW, paneInnerHeight(m.state))
+	if !strings.Contains(out, m.styles.unreadCurrent.Render(" ●  ")) {
+		t.Fatalf("expected thread current-row marker to remain visible in detail focus, got %q", out)
+	}
+}
+
 func TestSelectedUnreadNotificationRowKeepsMarkerAndSelectedTimestampStyling(t *testing.T) {
 	m := newModel(context.Background(), nil, nil)
 	line := " ●  1h owner/repo  Add support for marker styling"

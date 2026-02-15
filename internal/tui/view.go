@@ -38,9 +38,9 @@ func (m *model) View() string {
 	if midW > 0 {
 		switch midPaneContent(mode) {
 		case paneContentThread:
-			panes = append(panes, m.stylePaneActivity(m.renderThread(midW, panesInnerHeight), m.state.Focus == focusThread))
+			panes = append(panes, m.stylePaneActivity(m.renderThread(midW, panesInnerHeight), m.isThreadSourceActiveInDetail() || m.state.Focus == focusThread))
 		default:
-			panes = append(panes, m.stylePaneActivity(m.renderTimeline(midW, panesInnerHeight), m.state.Focus == focusTimeline))
+			panes = append(panes, m.stylePaneActivity(m.renderTimeline(midW, panesInnerHeight), m.isTimelineSourceActiveInDetail() || m.state.Focus == focusTimeline))
 		}
 	}
 	if rightW > 0 {
@@ -67,6 +67,28 @@ func (m *model) View() string {
 		return overlayModalCentered(base, m.renderHelpModal(), m.state.Width, m.state.Height)
 	}
 	return base
+}
+
+func (m *model) isTimelineSourceActiveInDetail() bool {
+	if m.state.Focus != focusDetail {
+		return false
+	}
+	ts := m.state.currentTimeline()
+	if ts == nil {
+		return true
+	}
+	return ts.activeThreadID == ""
+}
+
+func (m *model) isThreadSourceActiveInDetail() bool {
+	if m.state.Focus != focusDetail {
+		return false
+	}
+	ts := m.state.currentTimeline()
+	if ts == nil {
+		return false
+	}
+	return ts.activeThreadID != ""
 }
 
 func (m *model) renderHelpModal() string {
@@ -659,7 +681,7 @@ func (m *model) renderTimeline(width, height int) string {
 	lines := make([]string, 0, max(1, height))
 	rowIndexByLine := make([]int, 0, max(1, height))
 	selectedRow := -1
-	highlightSelection := m.state.Focus == focusTimeline
+	highlightSelection := m.state.Focus == focusTimeline || m.isTimelineSourceActiveInDetail()
 	ts := m.state.currentTimeline()
 	if ts == nil {
 		lines = append(lines, m.styles.muted.Render("select a notification"))
@@ -721,7 +743,7 @@ func (m *model) renderThread(width, height int) string {
 	lines := make([]string, 0, max(1, height))
 	rowIndexByLine := make([]int, 0, max(1, height))
 	selectedRow := -1
-	highlightSelection := m.state.Focus == focusThread
+	highlightSelection := m.state.Focus == focusThread || m.isThreadSourceActiveInDetail()
 	ts := m.state.currentTimeline()
 	if ts == nil || ts.activeThreadID == "" {
 		lines = append(lines, m.styles.muted.Render("no thread selected"))
