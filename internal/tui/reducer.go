@@ -1326,8 +1326,9 @@ func toggleMarkedRead(state *AppState, effects *[]Effect) bool {
 		if len(targets) == 0 {
 			return false
 		}
+		desiredRead := desiredReadForMarkedNotifications(*state, targets)
 		for _, n := range targets {
-			toggleNotificationReadNoAdvance(state, effects, n)
+			setNotificationReadNoAdvance(state, effects, n, desiredRead)
 			clearNotifMarked(state, n.id)
 		}
 		state.Status = "updated read state"
@@ -1341,8 +1342,9 @@ func toggleMarkedRead(state *AppState, effects *[]Effect) bool {
 		if len(rows) == 0 {
 			return false
 		}
+		desiredRead := desiredReadForMarkedTimelineRows(ts, rows)
 		for _, row := range rows {
-			toggleTimelineRowReadNoAdvance(state, effects, ts, row)
+			setTimelineRowReadNoAdvance(state, effects, ts, row, desiredRead)
 			clearTimelineMarked(state, state.CurrentRef, row.id)
 		}
 		state.Status = "updated read state"
@@ -1356,8 +1358,9 @@ func toggleMarkedRead(state *AppState, effects *[]Effect) bool {
 		if len(rows) == 0 {
 			return false
 		}
+		desiredRead := desiredReadForMarkedTimelineRows(ts, rows)
 		for _, row := range rows {
-			toggleTimelineRowReadNoAdvance(state, effects, ts, row)
+			setTimelineRowReadNoAdvance(state, effects, ts, row, desiredRead)
 			clearThreadMarked(state, state.CurrentRef, row.id)
 		}
 		state.Status = "updated read state"
@@ -1377,23 +1380,28 @@ func toggleNotificationReadNoAdvance(state *AppState, effects *[]Effect, n notif
 	if targetTS == nil {
 		return
 	}
-	eventIDs := targetTS.allEventIDs()
-	currentRead := true
-	for _, id := range eventIDs {
-		if id == "" {
-			continue
-		}
-		if !targetTS.readByEventID[id] {
-			currentRead = false
-			break
-		}
+	known, read := state.notificationReadState(n)
+	setNotificationReadNoAdvance(state, effects, n, known && !read)
+}
+
+func setNotificationReadNoAdvance(state *AppState, effects *[]Effect, n notifRow, desiredRead bool) {
+	targetRef := n.ref
+	targetTS := state.TimelineByRef[targetRef]
+	if targetTS == nil {
+		ensureTimelineState(state, targetRef)
+		targetTS = state.TimelineByRef[targetRef]
 	}
-	if len(eventIDs) == 0 {
-		setParentReadOverride(state, effects, targetRef, true)
-		beginReadThrough(state, effects, targetRef, targetTS, true)
+	if targetTS == nil {
 		return
 	}
-	desiredRead := !currentRead
+	eventIDs := targetTS.allEventIDs()
+	if len(eventIDs) == 0 {
+		setParentReadOverride(state, effects, targetRef, desiredRead)
+		if desiredRead {
+			beginReadThrough(state, effects, targetRef, targetTS, true)
+		}
+		return
+	}
 	if desiredRead {
 		setParentReadOverride(state, effects, targetRef, true)
 		beginReadThrough(state, effects, targetRef, targetTS, true)
@@ -1422,6 +1430,10 @@ func toggleNotificationReadNoAdvance(state *AppState, effects *[]Effect, n notif
 }
 
 func toggleTimelineRowReadNoAdvance(state *AppState, effects *[]Effect, ts *timelineState, row displayTimelineRow) {
+	setTimelineRowReadNoAdvance(state, effects, ts, row, !ts.rowRead(row))
+}
+
+func setTimelineRowReadNoAdvance(state *AppState, effects *[]Effect, ts *timelineState, row displayTimelineRow, desiredRead bool) {
 	if ts == nil {
 		return
 	}
@@ -1429,7 +1441,6 @@ func toggleTimelineRowReadNoAdvance(state *AppState, effects *[]Effect, ts *time
 	if len(eventIDs) == 0 {
 		return
 	}
-	desiredRead := !ts.rowRead(row)
 	if !desiredRead {
 		setParentReadOverride(state, effects, state.CurrentRef, false)
 	}
@@ -1452,6 +1463,38 @@ func toggleTimelineRowReadNoAdvance(state *AppState, effects *[]Effect, ts *time
 	}
 	state.PendingRead[opID] = pendingReadOp{ref: state.CurrentRef, eventIDs: append([]string(nil), eventIDs...), read: desiredRead, prevRead: prevRead, prevKnown: prevKnown}
 	*effects = append(*effects, PersistReadStateEffect{OpID: opID, Ref: state.CurrentRef, EventIDs: append([]string(nil), eventIDs...), Read: desiredRead})
+}
+
+func desiredReadForMarkedNotifications(state AppState, targets []notifRow) bool {
+	allRead := true
+	for _, n := range targets {
+		known, read := state.notificationReadState(n)
+		if !known || !read {
+			allRead = false
+			break
+		}
+	}
+	if allRead {
+		return false
+	}
+	return true
+}
+
+func desiredReadForMarkedTimelineRows(ts *timelineState, rows []displayTimelineRow) bool {
+	if ts == nil {
+		return false
+	}
+	allRead := true
+	for _, row := range rows {
+		if !ts.rowRead(row) {
+			allRead = false
+			break
+		}
+	}
+	if allRead {
+		return false
+	}
+	return true
 }
 
 func toggleNotifMarked(state *AppState, notifID string) {

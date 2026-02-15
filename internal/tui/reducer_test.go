@@ -3043,6 +3043,105 @@ func TestReadUsesMarkedNotificationsAndClearsMarks(t *testing.T) {
 	}
 }
 
+func TestReadUsesBulkStateForMarkedNotifications(t *testing.T) {
+	tests := []struct {
+		name       string
+		read1      bool
+		read2      bool
+		expectRead bool
+	}{
+		{name: "all unread become read", read1: false, read2: false, expectRead: true},
+		{name: "all read become unread", read1: true, read2: true, expectRead: false},
+		{name: "mixed become read", read1: true, read2: false, expectRead: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			state := NewState()
+			state.Focus = focusNotifications
+			state.Notifications = []notifRow{
+				{id: "1", repo: "o/r", ref: "o/r#1", title: "one", updatedAt: time.Now().UTC()},
+				{id: "2", repo: "o/r", ref: "o/r#2", title: "two", updatedAt: time.Now().UTC().Add(-time.Minute)},
+			}
+			state.rebuildNotifIndex()
+			state.SelectedNotif = "1"
+			state.NotifSelected = 0
+			state.CurrentRef = "o/r#1"
+			state.MarkedNotifications["1"] = true
+			state.MarkedNotifications["2"] = true
+
+			mkTS := func(ref string, eventID string, read bool) *timelineState {
+				ts := &timelineState{
+					ref:                ref,
+					rowIndexByID:       map[string]int{},
+					threadByID:         map[string]*threadGroup{},
+					expandedThreads:    map[string]bool{},
+					readByEventID:      map[string]bool{eventID: read},
+					readKnownByEventID: map[string]bool{eventID: true},
+					readLoadInFlight:   map[string]bool{},
+				}
+				body := "b"
+				ts.insertTimelineEvent(ghpr.TimelineEvent{ID: eventID, Type: "github.timeline.commented", OccurredAt: time.Now().UTC(), Comment: &ghpr.CommentContext{Body: &body}})
+				return ts
+			}
+			state.TimelineByRef["o/r#1"] = mkTS("o/r#1", "e1", tc.read1)
+			state.TimelineByRef["o/r#2"] = mkTS("o/r#2", "e2", tc.read2)
+
+			next, effects := Reduce(state, KeyEvent{Key: "r"})
+
+			if next.TimelineByRef["o/r#1"].readByEventID["e1"] != tc.expectRead {
+				t.Fatalf("expected ref1 read=%t", tc.expectRead)
+			}
+			if next.TimelineByRef["o/r#2"].readByEventID["e2"] != tc.expectRead {
+				t.Fatalf("expected ref2 read=%t", tc.expectRead)
+			}
+			reads := make(map[string]bool)
+			for _, eff := range effects {
+				if p, ok := eff.(PersistReadStateEffect); ok {
+					reads[p.Ref] = p.Read
+				}
+			}
+			if len(reads) != 2 || reads["o/r#1"] != tc.expectRead || reads["o/r#2"] != tc.expectRead {
+				t.Fatalf("expected bulk persist read=%t for both refs, got %+v", tc.expectRead, reads)
+			}
+		})
+	}
+}
+
+func TestReadUsesBulkStateForMarkedTimelineRows(t *testing.T) {
+	state := NewState()
+	state.Focus = focusTimeline
+	state.Notifications = []notifRow{{id: "1", repo: "o/r", ref: "o/r#1", title: "one", updatedAt: time.Now().UTC()}}
+	state.rebuildNotifIndex()
+	state.SelectedNotif = "1"
+	state.CurrentRef = "o/r#1"
+	ts := &timelineState{
+		ref:                "o/r#1",
+		rowIndexByID:       map[string]int{},
+		threadByID:         map[string]*threadGroup{},
+		expandedThreads:    map[string]bool{},
+		readByEventID:      map[string]bool{"e1": true, "e2": false},
+		readKnownByEventID: map[string]bool{"e1": true, "e2": true},
+		readLoadInFlight:   map[string]bool{},
+	}
+	body := "b"
+	ts.insertTimelineEvent(ghpr.TimelineEvent{ID: "e1", Type: "github.timeline.commented", OccurredAt: time.Now().UTC(), Comment: &ghpr.CommentContext{Body: &body}})
+	ts.insertTimelineEvent(ghpr.TimelineEvent{ID: "e2", Type: "github.timeline.commented", OccurredAt: time.Now().UTC().Add(time.Minute), Comment: &ghpr.CommentContext{Body: &body}})
+	state.TimelineByRef["o/r#1"] = ts
+	state.MarkedTimelineByRef["o/r#1"] = map[string]bool{eventRowID("e1"): true, eventRowID("e2"): true}
+
+	next, effects := Reduce(state, KeyEvent{Key: "r"})
+
+	if !next.TimelineByRef["o/r#1"].readByEventID["e1"] || !next.TimelineByRef["o/r#1"].readByEventID["e2"] {
+		t.Fatalf("expected mixed marked timeline rows to become read")
+	}
+	for _, eff := range effects {
+		if p, ok := eff.(PersistReadStateEffect); ok && !p.Read {
+			t.Fatalf("expected persist read=true for mixed marked timeline rows")
+		}
+	}
+}
+
 func TestArchiveUsesMarkedNotificationsAndClearsMarks(t *testing.T) {
 	state := NewState()
 	state.Focus = focusNotifications
