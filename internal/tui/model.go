@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"gh-pr/ghpr"
 	"gh-pr/internal/readstate"
@@ -21,7 +22,7 @@ type model struct {
 
 	msgCh chan tea.Msg
 
-	timelineCancel context.CancelFunc
+	timelineCancelByRef map[string]context.CancelFunc
 
 	styles styles
 }
@@ -76,11 +77,12 @@ func newModel(ctx context.Context, client *ghpr.Client, store *readstate.Store) 
 	markedBg := lipgloss.Color("#323548")
 
 	return &model{
-		ctx:    ctx,
-		client: client,
-		store:  store,
-		state:  NewState(),
-		msgCh:  make(chan tea.Msg, 512),
+		ctx:                 ctx,
+		client:              client,
+		store:               store,
+		state:               NewState(),
+		msgCh:               make(chan tea.Msg, 512),
+		timelineCancelByRef: make(map[string]context.CancelFunc),
 		styles: styles{
 			title:     lipgloss.NewStyle().Bold(true).Foreground(t.title),
 			text:      lipgloss.NewStyle().Foreground(t.textPrimary),
@@ -118,9 +120,7 @@ func newModel(ctx context.Context, client *ghpr.Client, store *readstate.Store) 
 			kindPRDraftCur: lipgloss.NewStyle().Foreground(t.textMuted).Background(lipgloss.Color("#3A3C4F")),
 			kindPRWaitCur:  lipgloss.NewStyle().Foreground(t.info).Background(lipgloss.Color("#3A3C4F")),
 			error:          lipgloss.NewStyle().Foreground(t.danger),
-			status: lipgloss.NewStyle().
-				Foreground(t.statusFg).
-				Background(t.statusBg),
+			status:         lipgloss.NewStyle().Foreground(t.textMuted),
 			tab:            lipgloss.NewStyle().Foreground(t.textSecondary),
 			tabActive:      lipgloss.NewStyle().Foreground(t.focus).Background(t.surface).Bold(true),
 			separator:      lipgloss.NewStyle().Foreground(t.separator),
@@ -157,20 +157,32 @@ func waitForAsyncMsg(ch <-chan tea.Msg) tea.Cmd {
 }
 
 func (m *model) bottomStatus() string {
-	right := ""
+	parts := make([]string, 0, 3)
+	if strings.TrimSpace(m.state.Status) != "" {
+		parts = append(parts, m.state.Status)
+	}
 	if m.state.RefreshInFlight {
 		spinnerFrames := []string{"-", "\\", "|", "/"}
 		frame := spinnerFrames[m.state.RefreshSpinnerIndex%len(spinnerFrames)]
 		left, total := m.state.refreshProgress()
-		right = fmt.Sprintf("refresh %s %d/%d", frame, left, total)
-	} else if !m.state.LastRefreshAt.IsZero() {
-		right = "last refresh " + m.state.LastRefreshAt.Local().Format("15:04:05")
-	}
-	if right == "" {
-		if strings.TrimSpace(m.state.Status) != "" {
-			right = m.state.Status
+		parts = append(parts, fmt.Sprintf("refresh %s %d/%d", frame, left, total))
+	} else {
+		queued, inFlight := m.state.timelineLoadProgress()
+		left := queued + inFlight
+		if left > 0 {
+			total := m.state.TimelineLoadTotal
+			if total < left {
+				total = left
+			}
+			parts = append(parts, fmt.Sprintf("loading %d/%d", left, total))
 		}
 	}
+	if !m.state.LastRefreshAt.IsZero() {
+		parts = append(parts, "refreshed "+relativeRefreshAge(m.state.LastRefreshAt))
+	} else {
+		parts = append(parts, "refreshed never")
+	}
+	right := strings.Join(parts, " | ")
 	if right == "" {
 		return ""
 	}
@@ -183,4 +195,33 @@ func (m *model) bottomStatus() string {
 		return clampDisplayWidth(right, avail)
 	}
 	return right
+}
+
+func relativeRefreshAge(ts time.Time) string {
+	d := time.Since(ts)
+	if d < 0 {
+		d = 0
+	}
+	if d < time.Minute {
+		return "just now"
+	}
+	if d < time.Hour {
+		mins := int(d / time.Minute)
+		if mins == 1 {
+			return "1 min ago"
+		}
+		return fmt.Sprintf("%d min ago", mins)
+	}
+	if d < 24*time.Hour {
+		hours := int(d / time.Hour)
+		if hours == 1 {
+			return "1 hr ago"
+		}
+		return fmt.Sprintf("%d hr ago", hours)
+	}
+	days := int(d / (24 * time.Hour))
+	if days == 1 {
+		return "1 day ago"
+	}
+	return fmt.Sprintf("%d days ago", days)
 }

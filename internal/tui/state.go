@@ -124,10 +124,15 @@ type AppState struct {
 	NotifErr       string
 	NotifTab       string
 
-	TimelineGen   int
-	CurrentRef    string
-	TimelineByRef map[string]*timelineState
-	HideRead      bool
+	TimelineGen               int
+	CurrentRef                string
+	TimelineByRef             map[string]*timelineState
+	TimelineLoadQueue         []string
+	TimelineLoadGenByRef      map[string]int
+	TimelineLoadInFlightByRef map[string]bool
+	TimelineLoadPendingByRef  map[string]bool
+	TimelineLoadTotal         int
+	HideRead                  bool
 
 	Status string
 	Quit   bool
@@ -216,6 +221,9 @@ func NewState() AppState {
 		NotifLoading:                true,
 		NotifTab:                    allNotificationsTab,
 		TimelineByRef:               make(map[string]*timelineState),
+		TimelineLoadGenByRef:        make(map[string]int),
+		TimelineLoadInFlightByRef:   make(map[string]bool),
+		TimelineLoadPendingByRef:    make(map[string]bool),
 		RefreshNotifSeen:            make(map[string]bool),
 		RefreshTimelinePrevByRef:    make(map[string]*timelineState),
 		RefreshTimelineAnchorByRef:  make(map[string]timelineRefreshAnchor),
@@ -253,9 +261,6 @@ func (s AppState) refreshProgress() (left int, total int) {
 	switch s.RefreshStage {
 	case "timeline":
 		left = len(s.RefreshQueue)
-		if s.RefreshActiveRef != "" {
-			left++
-		}
 	case "notifications":
 		left = 0
 	default:
@@ -270,6 +275,18 @@ func (s AppState) refreshProgress() (left int, total int) {
 	}
 
 	return left, total
+}
+
+func (s AppState) timelineLoadProgress() (queued int, inFlight int) {
+	queued = len(s.TimelineLoadQueue)
+	inFlight = len(s.TimelineLoadInFlightByRef)
+	if queued < 0 {
+		queued = 0
+	}
+	if inFlight < 0 {
+		inFlight = 0
+	}
+	return queued, inFlight
 }
 
 const allNotificationsTab = "All"
@@ -356,6 +373,9 @@ func (s *AppState) visibleNotifications() []notifRow {
 	tab := s.activeNotificationTab()
 	rows := make([]notifRow, 0, len(s.Notifications))
 	for _, n := range s.Notifications {
+		if !s.notificationRowReady(n) {
+			continue
+		}
 		if tab != allNotificationsTab && notificationOrgFromRepo(n.repo) != tab {
 			continue
 		}
@@ -368,6 +388,13 @@ func (s *AppState) visibleNotifications() []notifRow {
 		rows = append(rows, n)
 	}
 	return rows
+}
+
+func (s *AppState) notificationRowReady(n notifRow) bool {
+	if strings.TrimSpace(strings.ToLower(n.kind)) != "pr" {
+		return true
+	}
+	return s.ReviewReqLoadedByRef[strings.TrimSpace(n.ref)]
 }
 
 func indexOfNotificationByID(rows []notifRow, id string) int {

@@ -800,6 +800,7 @@ func TestRenderNotificationsShowsLowercaseKindLabels(t *testing.T) {
 	m.state.rebuildNotifIndex()
 	m.state.SelectedNotif = "n1"
 	m.state.NotifSelected = 0
+	m.state.ReviewReqLoadedByRef["owner/repo#1"] = true
 
 	leftW, _, _ := paneWidths(panesTotalWidth(m.state.Width, m.state.Focus, m.state.currentPaneMode()), m.state.Focus, m.state.currentPaneMode())
 	out := m.renderNotifications(leftW, paneInnerHeight(m.state))
@@ -822,6 +823,8 @@ func TestRenderNotificationsShowsAuthorColumnWhenPresent(t *testing.T) {
 	m.state.rebuildNotifIndex()
 	m.state.SelectedNotif = "n1"
 	m.state.NotifSelected = 0
+	m.state.ReviewReqLoadedByRef["owner/repo#1"] = true
+	m.state.ReviewReqLoadedByRef["owner/repo#2"] = true
 
 	leftW, _, _ := paneWidths(panesTotalWidth(m.state.Width, m.state.Focus, m.state.currentPaneMode()), m.state.Focus, m.state.currentPaneMode())
 	out := m.renderNotifications(leftW, paneInnerHeight(m.state))
@@ -849,6 +852,7 @@ func TestRenderNotificationsHighlightsWaitingOnMyReviewPR(t *testing.T) {
 	m.state.SelectedNotif = "n1"
 	m.state.NotifSelected = 0
 	m.state.ReviewReqByRef["owner/repo#1"] = true
+	m.state.ReviewReqLoadedByRef["owner/repo#1"] = true
 
 	leftW, _, _ := paneWidths(panesTotalWidth(m.state.Width, m.state.Focus, m.state.currentPaneMode()), m.state.Focus, m.state.currentPaneMode())
 	out := m.renderNotifications(leftW, paneInnerHeight(m.state))
@@ -873,6 +877,7 @@ func TestRenderNotificationsShowsDraftPRLabelMuted(t *testing.T) {
 	m.state.SelectedNotif = "n1"
 	m.state.NotifSelected = 0
 	m.state.ReviewReqDraftByRef["owner/repo#1"] = true
+	m.state.ReviewReqLoadedByRef["owner/repo#1"] = true
 
 	leftW, _, _ := paneWidths(panesTotalWidth(m.state.Width, m.state.Focus, m.state.currentPaneMode()), m.state.Focus, m.state.currentPaneMode())
 	out := m.renderNotifications(leftW, paneInnerHeight(m.state))
@@ -1371,8 +1376,7 @@ func TestBottomBarShowsRefreshSpinnerWhenRefreshing(t *testing.T) {
 	m.state.RefreshInFlight = true
 	m.state.RefreshSpinnerIndex = 2
 	m.state.RefreshStage = "timeline"
-	m.state.RefreshActiveRef = "owner/repo#2"
-	m.state.RefreshQueue = []string{"owner/repo#3"}
+	m.state.RefreshQueue = []string{"owner/repo#2", "owner/repo#3"}
 	m.state.RefreshTotalRefs = 3
 
 	out := m.View()
@@ -1381,14 +1385,28 @@ func TestBottomBarShowsRefreshSpinnerWhenRefreshing(t *testing.T) {
 	}
 }
 
+func TestBottomBarShowsAsyncQueueProgressWhenNotRefreshing(t *testing.T) {
+	m := newModel(context.Background(), nil, nil)
+	m.state.Width = 80
+	m.state.Height = 10
+	m.state.TimelineLoadQueue = []string{"owner/repo#2", "owner/repo#3"}
+	m.state.TimelineLoadInFlightByRef["owner/repo#1"] = true
+	m.state.TimelineLoadTotal = 5
+
+	out := m.View()
+	if !strings.Contains(out, "loading 3/5") {
+		t.Fatalf("expected async queue progress in bottom bar, got %q", out)
+	}
+}
+
 func TestBottomBarShowsLastRefreshTimeWhenIdle(t *testing.T) {
 	m := newModel(context.Background(), nil, nil)
 	m.state.Width = 80
 	m.state.Height = 10
-	m.state.LastRefreshAt = time.Date(2026, 2, 13, 14, 5, 6, 0, time.Local)
+	m.state.LastRefreshAt = time.Now().Add(-5 * time.Minute)
 
 	out := m.View()
-	if !strings.Contains(out, "last refresh 14:05:06") {
+	if !strings.Contains(out, "refreshed 5 min ago") {
 		t.Fatalf("expected last refresh time in bottom bar, got %q", out)
 	}
 }
@@ -1397,7 +1415,7 @@ func TestBottomBarRightAlignsRefreshSegment(t *testing.T) {
 	m := newModel(context.Background(), nil, nil)
 	m.state.Width = 72
 	m.state.Height = 10
-	m.state.LastRefreshAt = time.Date(2026, 2, 13, 14, 5, 6, 0, time.Local)
+	m.state.LastRefreshAt = time.Now().Add(-2 * time.Hour)
 
 	out := m.View()
 	lastLine := out
@@ -1406,7 +1424,22 @@ func TestBottomBarRightAlignsRefreshSegment(t *testing.T) {
 	}
 	ansi := regexp.MustCompile(`\x1b\[[0-9;]*m`)
 	plain := strings.TrimRight(ansi.ReplaceAllString(lastLine, ""), " ")
-	if !strings.HasSuffix(plain, "last refresh 14:05:06") {
+	if !strings.HasSuffix(plain, "refreshed 2 hr ago") {
 		t.Fatalf("expected right-aligned refresh segment at end, got %q", plain)
+	}
+}
+
+func TestRenderNotificationsDoesNotShowNoNotificationsWhilePRAuthorsPending(t *testing.T) {
+	m := newModel(context.Background(), nil, nil)
+	m.state.Width = 80
+	m.state.Height = 10
+	m.state.NotifLoading = false
+	m.state.NotifErr = ""
+	m.state.Notifications = []notifRow{{id: "n1", repo: "o/r", kind: "pr", ref: "o/r#1", title: "one", updatedAt: time.Now().UTC()}}
+	m.state.rebuildNotifIndex()
+
+	out := m.renderNotifications(40, 8)
+	if strings.Contains(out, "no notifications") {
+		t.Fatalf("expected pending-author PR list not to render no-notifications placeholder, got %q", out)
 	}
 }

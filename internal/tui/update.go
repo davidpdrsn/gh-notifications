@@ -299,19 +299,32 @@ func (m *model) applyEffects(effects []Effect) {
 			}
 			m.startNotificationsLoader(ctx, cancel, e.Generation)
 		case CancelTimelineEffect:
-			if m.timelineCancel != nil {
-				m.timelineCancel()
-				m.timelineCancel = nil
+			if strings.TrimSpace(e.Ref) == "" {
+				for ref, cancel := range m.timelineCancelByRef {
+					if cancel != nil {
+						cancel()
+					}
+					delete(m.timelineCancelByRef, ref)
+				}
+				break
+			}
+			if cancel, ok := m.timelineCancelByRef[e.Ref]; ok {
+				if cancel != nil {
+					cancel()
+				}
+				delete(m.timelineCancelByRef, e.Ref)
 			}
 		case StartTimelineEffect:
-			if m.timelineCancel != nil {
-				m.timelineCancel()
+			if cancel, ok := m.timelineCancelByRef[e.Ref]; ok {
+				if cancel != nil {
+					cancel()
+				}
 			}
 			ctx, cancel := context.WithCancel(m.ctx)
 			if m.state.RefreshInFlight && m.state.RefreshStage == "timeline" && m.state.RefreshActiveRef == e.Ref {
 				ctx, cancel = context.WithTimeout(m.ctx, 45*time.Second)
 			}
-			m.timelineCancel = cancel
+			m.timelineCancelByRef[e.Ref] = cancel
 			m.startTimelineLoader(ctx, e.Generation, e.Ref)
 		case StartCommitDiffEffect:
 			m.startCommitDiffLoader(e.Ref, e.EventID, e.DiffURL)

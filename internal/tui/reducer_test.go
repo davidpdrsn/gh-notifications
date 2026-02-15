@@ -209,8 +209,8 @@ func TestMoveNotificationsRestartsTimelineWhenReturningToStaleLoadingRef(t *test
 			foundStartR1 = true
 		}
 	}
-	if !foundStartR1 {
-		t.Fatalf("expected StartTimelineEffect for o/r#1 when returning to stale-loading ref")
+	if !foundStartR1 && !next.TimelineLoadInFlightByRef["o/r#1"] {
+		t.Fatalf("expected o/r#1 timeline to be loading when returning to stale-loading ref")
 	}
 }
 
@@ -1361,8 +1361,15 @@ func TestTabCyclesNotificationOrgTabs(t *testing.T) {
 	if next.CurrentRef != "godotengine/godot#2" {
 		t.Fatalf("expected current ref to follow selected tab item, got %q", next.CurrentRef)
 	}
-	if len(effects) < 2 {
-		t.Fatalf("expected timeline reload effects after ref change, got %d", len(effects))
+	foundReload := false
+	for _, eff := range effects {
+		if start, ok := eff.(StartTimelineEffect); ok && start.Ref == "godotengine/godot#2" {
+			foundReload = true
+			break
+		}
+	}
+	if !foundReload && !next.TimelineLoadInFlightByRef["godotengine/godot#2"] {
+		t.Fatalf("expected target tab timeline to be loading after ref change")
 	}
 
 	next, effects = Reduce(next, KeyEvent{Key: "shift+tab"})
@@ -1375,8 +1382,15 @@ func TestTabCyclesNotificationOrgTabs(t *testing.T) {
 	if next.CurrentRef != "lun-energy/integrations#1" {
 		t.Fatalf("expected current ref to follow reverse tab selection, got %q", next.CurrentRef)
 	}
-	if len(effects) < 2 {
-		t.Fatalf("expected timeline reload effects after reverse tab ref change, got %d", len(effects))
+	foundReload = false
+	for _, eff := range effects {
+		if start, ok := eff.(StartTimelineEffect); ok && start.Ref == "lun-energy/integrations#1" {
+			foundReload = true
+			break
+		}
+	}
+	if !foundReload && !next.TimelineLoadInFlightByRef["lun-energy/integrations#1"] {
+		t.Fatalf("expected reverse tab timeline to be loading after ref change")
 	}
 }
 
@@ -2382,7 +2396,7 @@ func TestCtrlRStartsRefreshCurrentRefFirst(t *testing.T) {
 	if next.TimelineLoadingRef != "o/r#2" {
 		t.Fatalf("expected timeline loading ref set, got %q", next.TimelineLoadingRef)
 	}
-	if len(next.RefreshQueue) != 2 || next.RefreshQueue[0] != "o/r#1" || next.RefreshQueue[1] != "o/r#3" {
+	if len(next.RefreshQueue) != 3 || next.RefreshQueue[0] != "o/r#2" || next.RefreshQueue[1] != "o/r#1" || next.RefreshQueue[2] != "o/r#3" {
 		t.Fatalf("unexpected refresh queue order: %+v", next.RefreshQueue)
 	}
 
@@ -2444,15 +2458,16 @@ func TestSelectionDuringRefreshDoesNotInterruptRefreshLoader(t *testing.T) {
 		}
 	}
 
-	afterDone, doneEffects := Reduce(afterMove, TimelineDoneEvent{Generation: beforeGen, Ref: "o/r#1"})
+	gen := afterMove.TimelineLoadGenByRef["o/r#1"]
+	afterDone, doneEffects := Reduce(afterMove, TimelineDoneEvent{Generation: gen, Ref: "o/r#1"})
 	if !afterDone.RefreshInFlight {
 		t.Fatalf("expected refresh to continue after first timeline finishes")
 	}
 	if afterDone.RefreshActiveRef != "o/r#2" {
 		t.Fatalf("expected refresh to continue with o/r#2, got %q", afterDone.RefreshActiveRef)
 	}
-	if afterDone.TimelineLoadingRef != "o/r#2" {
-		t.Fatalf("expected timeline loading ref to move to o/r#2, got %q", afterDone.TimelineLoadingRef)
+	if !afterDone.TimelineLoadInFlightByRef["o/r#2"] {
+		t.Fatalf("expected o/r#2 to remain in flight during parallel refresh")
 	}
 	foundNextStart := false
 	for _, eff := range doneEffects {
@@ -2461,8 +2476,8 @@ func TestSelectionDuringRefreshDoesNotInterruptRefreshLoader(t *testing.T) {
 			break
 		}
 	}
-	if !foundNextStart {
-		t.Fatalf("expected next timeline refresh start effect")
+	if foundNextStart {
+		t.Fatalf("expected no new timeline start effect; o/r#2 should already be running")
 	}
 }
 
@@ -2565,6 +2580,30 @@ func TestAutoRefreshTickDoesNotQueueWhileRefreshInFlight(t *testing.T) {
 	}
 }
 
+func TestAutoRefreshTickUsesParallelTimelineWorkers(t *testing.T) {
+	state := NewState()
+	state.CurrentRef = "o/r#2"
+	state.TimelineByRef["o/r#1"] = &timelineState{ref: "o/r#1"}
+	state.TimelineByRef["o/r#2"] = &timelineState{ref: "o/r#2"}
+	state.TimelineByRef["o/r#3"] = &timelineState{ref: "o/r#3"}
+	state.TimelineByRef["o/r#4"] = &timelineState{ref: "o/r#4"}
+
+	next, effects := Reduce(state, AutoRefreshTickEvent{})
+
+	if !next.RefreshInFlight || next.RefreshStage != "timeline" {
+		t.Fatalf("expected auto refresh to start timeline phase")
+	}
+	starts := 0
+	for _, eff := range effects {
+		if _, ok := eff.(StartTimelineEffect); ok {
+			starts++
+		}
+	}
+	if starts != timelineWorkerCount {
+		t.Fatalf("expected %d timeline loads to start, got %d", timelineWorkerCount, starts)
+	}
+}
+
 func TestFinishRefreshDoesNotSetRefreshedStatus(t *testing.T) {
 	state := NewState()
 	state.CurrentRef = "o/r#1"
@@ -2578,6 +2617,95 @@ func TestFinishRefreshDoesNotSetRefreshedStatus(t *testing.T) {
 
 	if next.Status == "refreshed" {
 		t.Fatalf("expected no refreshed status text")
+	}
+}
+
+func TestInitialNotificationsDoneSetsLastRefreshTime(t *testing.T) {
+	state := NewState()
+	next, _ := Reduce(state, NotificationsDoneEvent{Generation: state.NotifGen})
+	if next.LastRefreshAt.IsZero() {
+		t.Fatalf("expected initial notifications load to set last refresh time")
+	}
+}
+
+func TestReviewReqStateLoadedKeepsExistingAuthorWhenMissingInPayload(t *testing.T) {
+	state := NewState()
+	state.AuthorByRef["o/r#1"] = "alice"
+	state.Notifications = []notifRow{{id: "n1", ref: "o/r#1", repo: "o/r", title: "one", kind: "pr", author: "alice", updatedAt: time.Now()}}
+	state.rebuildNotifIndex()
+
+	next, _ := Reduce(state, ReviewReqStateLoadedEvent{Refs: []string{"o/r#1"}, AuthorByRef: map[string]string{}})
+
+	if next.AuthorByRef["o/r#1"] != "alice" {
+		t.Fatalf("expected existing author to be preserved, got %q", next.AuthorByRef["o/r#1"])
+	}
+	if len(next.Notifications) != 1 || next.Notifications[0].author != "alice" {
+		t.Fatalf("expected notification author to stay alice, got %+v", next.Notifications)
+	}
+}
+
+func TestNotificationsArrivedForPRDoesNotClearExistingAuthor(t *testing.T) {
+	state := NewState()
+	state.AuthorByRef["o/r#1"] = "alice"
+
+	next, _ := Reduce(state, NotificationsArrivedEvent{
+		Generation: state.NotifGen,
+		Item: ghpr.NotificationEvent{
+			ID:        "n1",
+			UpdatedAt: time.Now(),
+			Repository: ghpr.NotificationRepository{
+				Owner: "o",
+				Repo:  "r",
+			},
+			Subject: ghpr.NotificationSubject{Title: "one"},
+			Target:  ghpr.NotificationTarget{Kind: "pr", Ref: "o/r#1"},
+		},
+	})
+
+	if next.AuthorByRef["o/r#1"] != "alice" {
+		t.Fatalf("expected existing author to remain, got %q", next.AuthorByRef["o/r#1"])
+	}
+}
+
+func TestPRNotificationHiddenUntilReviewStateLoaded(t *testing.T) {
+	state := NewState()
+	state.ViewerLoaded = true
+	state.ViewerLogin = "alice"
+	next, effects := Reduce(state, NotificationsArrivedEvent{
+		Generation: state.NotifGen,
+		Item: ghpr.NotificationEvent{
+			ID:        "n1",
+			UpdatedAt: time.Now(),
+			Repository: ghpr.NotificationRepository{
+				Owner: "o",
+				Repo:  "r",
+			},
+			Subject: ghpr.NotificationSubject{Title: "one"},
+			Target:  ghpr.NotificationTarget{Kind: "pr", Ref: "o/r#1"},
+		},
+	})
+
+	if len(next.visibleNotifications()) != 0 {
+		t.Fatalf("expected PR notification hidden before review state is loaded")
+	}
+	foundReviewLoad := false
+	for _, eff := range effects {
+		if load, ok := eff.(LoadReviewReqStateEffect); ok && len(load.Refs) == 1 && load.Refs[0] == "o/r#1" {
+			foundReviewLoad = true
+			break
+		}
+	}
+	if !foundReviewLoad {
+		t.Fatalf("expected review-state load effect for PR ref")
+	}
+
+	next, _ = Reduce(next, ReviewReqStateLoadedEvent{Refs: []string{"o/r#1"}, AuthorByRef: map[string]string{"o/r#1": "alice"}})
+	visible := next.visibleNotifications()
+	if len(visible) != 1 {
+		t.Fatalf("expected PR notification visible after review state loaded, got %d", len(visible))
+	}
+	if visible[0].author != "alice" {
+		t.Fatalf("expected author to be populated, got %q", visible[0].author)
 	}
 }
 

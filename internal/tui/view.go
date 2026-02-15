@@ -61,7 +61,7 @@ func (m *model) View() string {
 		sep := m.verticalSeparator(panesInnerHeight)
 		row = lipgloss.JoinHorizontal(lipgloss.Top, panes[0], sep, panes[1])
 	}
-	status := m.styles.status.Width(m.state.Width).Render(" " + m.bottomStatus())
+	status := m.styles.status.Width(m.state.Width).AlignHorizontal(lipgloss.Right).Render(m.bottomStatus())
 	base := lipgloss.JoinVertical(lipgloss.Left, row, status)
 	if m.state.HelpOpen {
 		return overlayModalCentered(base, m.renderHelpModal(), m.state.Width, m.state.Height)
@@ -223,16 +223,12 @@ func (m *model) renderNotifications(width, height int) string {
 	selectedRow := -1
 	lines = append(lines, m.renderNotificationTabs(contentWidth(width)))
 	rowIndexByLine = append(rowIndexByLine, -1)
-	if m.state.NotifLoading {
-		lines = append(lines, m.styles.muted.Render("loading..."))
-		rowIndexByLine = append(rowIndexByLine, -1)
-	}
 	if m.state.NotifErr != "" {
 		lines = append(lines, m.styles.error.Render("error: "+m.state.NotifErr))
 		rowIndexByLine = append(rowIndexByLine, -1)
 	}
 	visible := m.state.visibleNotifications()
-	if len(visible) == 0 && !m.state.NotifLoading && m.state.NotifErr == "" {
+	if len(visible) == 0 && !m.state.NotifLoading && m.state.NotifErr == "" && len(m.state.Notifications) == 0 {
 		lines = append(lines, m.styles.muted.Render("no notifications"))
 		rowIndexByLine = append(rowIndexByLine, -1)
 	}
@@ -257,18 +253,14 @@ func (m *model) renderNotifications(width, height int) string {
 		author := padToDisplayWidth(clampDisplayWidth(oneLine(n.author), authorColWidth), authorColWidth)
 		repo := padToDisplayWidth(clampDisplayWidth(oneLine(n.repo), repoColWidth), repoColWidth)
 		label := prefix + kind + " "
-		if authorColWidth > 0 {
-			label += author + " "
-		}
+		label += author + " "
 		label += repo + "  " + oneLine(n.title)
 		avail := paneContentWidthWithRelativeNumbers(width, height)
 		if avail < 1 {
 			avail = 1
 		}
 		indentWidth := lipgloss.Width(prefix) + kindColWidth + 1 + repoColWidth + 2
-		if authorColWidth > 0 {
-			indentWidth += authorColWidth + 1
-		}
+		indentWidth += authorColWidth + 1
 		minContinuationWidth := 12
 		maxIndent := avail - minContinuationWidth
 		if maxIndent < 0 {
@@ -399,7 +391,7 @@ func notificationRepoColumnWidth(rows []notifRow) int {
 }
 
 func notificationAuthorColumnWidth(rows []notifRow) int {
-	width := 0
+	width := 12
 	for i := range rows {
 		w := lipgloss.Width(oneLine(rows[i].author))
 		if w > width {
@@ -606,10 +598,6 @@ func (m *model) renderTimeline(width, height int) string {
 		lines = append(lines, m.styles.muted.Render("select a notification"))
 		rowIndexByLine = append(rowIndexByLine, -1)
 	} else {
-		if ts.loading {
-			lines = append(lines, m.styles.muted.Render("loading..."))
-			rowIndexByLine = append(rowIndexByLine, -1)
-		}
 		if ts.err != "" {
 			lines = append(lines, m.styles.error.Render("error: "+ts.err))
 			rowIndexByLine = append(rowIndexByLine, -1)

@@ -10,6 +10,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+const timelineWorkerCount = 3
+
 type Event interface{ isEvent() }
 
 type InitEvent struct{}
@@ -202,7 +204,7 @@ type StartTimelineEffect struct {
 	Generation int
 	Ref        string
 }
-type CancelTimelineEffect struct{}
+type CancelTimelineEffect struct{ Ref string }
 type StartCommitDiffEffect struct {
 	Ref     string
 	EventID string
@@ -270,10 +272,6 @@ func (ScheduleRefreshSpinnerTickEffect) isEffect() {
 func Reduce(state AppState, ev Event) (AppState, []Effect) {
 	effects := make([]Effect, 0)
 	focusBefore := state.Focus
-	expectedTimelineRef := state.TimelineLoadingRef
-	if expectedTimelineRef == "" {
-		expectedTimelineRef = state.CurrentRef
-	}
 
 	switch e := ev.(type) {
 	case InitEvent:
@@ -423,7 +421,6 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 				delete(state.ReviewReqMergedByRef, e.Item.Target.Ref)
 				delete(state.ReviewReqClosedByRef, e.Item.Target.Ref)
 				delete(state.ReviewReqDraftByRef, e.Item.Target.Ref)
-				delete(state.AuthorByRef, e.Item.Target.Ref)
 				delete(state.ReviewReqLoadedByRef, e.Item.Target.Ref)
 				delete(state.ReviewReqLoadInFlightByRef, e.Item.Target.Ref)
 				invalidateNotifMarkerCacheForRef(&state, e.Item.Target.Ref)
@@ -434,24 +431,15 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 				break
 			}
 			refChanged := state.insertNotification(e.Item)
-			if refChanged && state.CurrentRef != "" {
-				state.TimelineGen++
-				state.TimelineLoadingRef = state.CurrentRef
-				effects = append(effects,
-					CancelTimelineEffect{},
-					StartTimelineEffect{Generation: state.TimelineGen, Ref: state.CurrentRef},
-				)
-				ensureTimelineState(&state, state.CurrentRef)
-				ts := state.TimelineByRef[state.CurrentRef]
-				ts.loading = true
-				ts.done = false
-				ts.err = ""
+			if refChanged {
+				enqueueAllTimelineLoadsByPriority(&state)
 			}
 		}
 	case NotificationsDoneEvent:
 		if e.Generation == state.NotifGen {
 			if state.RefreshInFlight && state.RefreshStage == "notifications" {
 				commitRefreshNotifications(&state)
+				enqueueAllTimelineLoadsByPriority(&state)
 				queueParentReadStateLoadsForRefs(&state, &effects, visibleRefs(state.visibleNotifications()))
 				queueReviewReqLoadsForNotifications(&state, &effects)
 				finishRefresh(&state, &effects)
@@ -459,6 +447,8 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 			}
 			state.NotifLoading = false
 			state.NotifDone = true
+			state.LastRefreshAt = time.Now()
+			enqueueAllTimelineLoadsByPriority(&state)
 			queueReviewReqLoadsForNotifications(&state, &effects)
 		}
 	case NotificationsErrEvent:
@@ -473,7 +463,7 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 			state.NotifErr = e.Err
 		}
 	case TimelineArrivedEvent:
-		if e.Generation == state.TimelineGen && e.Ref == expectedTimelineRef {
+		if timelineEventMatches(state, e.Generation, e.Ref) {
 			ts := state.TimelineByRef[e.Ref]
 			if ts != nil {
 				ensureReadStateMaps(ts)
@@ -496,13 +486,18 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 			}
 		}
 	case TimelineWarnEvent:
-		if e.Generation == state.TimelineGen && e.Ref == expectedTimelineRef {
+		if timelineEventMatches(state, e.Generation, e.Ref) {
 			if shouldShowTimelineWarning(e.Message) {
 				state.Status = e.Message
 			}
 		}
 	case TimelineDoneEvent:
-		if e.Generation == state.TimelineGen && e.Ref == expectedTimelineRef {
+		if timelineEventMatches(state, e.Generation, e.Ref) {
+			delete(state.TimelineLoadInFlightByRef, e.Ref)
+			delete(state.TimelineLoadPendingByRef, e.Ref)
+			if len(state.TimelineLoadQueue)+len(state.TimelineLoadInFlightByRef) == 0 {
+				state.TimelineLoadTotal = 0
+			}
 			ts := state.TimelineByRef[e.Ref]
 			if ts != nil {
 				ts.loading = false
@@ -513,17 +508,20 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 					state.ReadThroughIDs = make(map[string]bool)
 					resumeSelectedTimelineAfterReadThrough(&state, &effects, e.Ref)
 				}
-				if state.RefreshInFlight && state.RefreshStage == "timeline" && state.RefreshActiveRef == e.Ref {
+				if state.RefreshInFlight && state.RefreshStage == "timeline" {
+					markRefreshTimelineRefComplete(&state, e.Ref)
 					applyTimelineRefreshSelectionFallback(&state, ts, e.Ref)
 					startNextRefreshStep(&state, &effects)
 				}
 			}
-			if state.TimelineLoadingRef == e.Ref {
-				state.TimelineLoadingRef = ""
-			}
 		}
 	case TimelineErrEvent:
-		if e.Generation == state.TimelineGen && e.Ref == expectedTimelineRef {
+		if timelineEventMatches(state, e.Generation, e.Ref) {
+			delete(state.TimelineLoadInFlightByRef, e.Ref)
+			delete(state.TimelineLoadPendingByRef, e.Ref)
+			if len(state.TimelineLoadQueue)+len(state.TimelineLoadInFlightByRef) == 0 {
+				state.TimelineLoadTotal = 0
+			}
 			ts := state.TimelineByRef[e.Ref]
 			if ts != nil {
 				ts.loading = false
@@ -533,15 +531,13 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 					state.ReadThroughIDs = make(map[string]bool)
 					resumeSelectedTimelineAfterReadThrough(&state, &effects, e.Ref)
 				}
-				if state.RefreshInFlight && state.RefreshStage == "timeline" && state.RefreshActiveRef == e.Ref {
+				if state.RefreshInFlight && state.RefreshStage == "timeline" {
+					markRefreshTimelineRefComplete(&state, e.Ref)
 					if prev, ok := state.RefreshTimelinePrevByRef[e.Ref]; ok && prev != nil {
 						state.TimelineByRef[e.Ref] = prev
 					}
 					startNextRefreshStep(&state, &effects)
 				}
-			}
-			if state.TimelineLoadingRef == e.Ref {
-				state.TimelineLoadingRef = ""
 			}
 		}
 	case ReadStateLoadedEvent:
@@ -713,11 +709,10 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 			} else {
 				delete(state.ReviewReqDraftByRef, ref)
 			}
-			author := strings.TrimSpace(e.AuthorByRef[ref])
-			if author != "" {
-				state.AuthorByRef[ref] = author
-			} else {
-				delete(state.AuthorByRef, ref)
+			author := strings.TrimSpace(state.AuthorByRef[ref])
+			if fresh := strings.TrimSpace(e.AuthorByRef[ref]); fresh != "" {
+				author = fresh
+				state.AuthorByRef[ref] = fresh
 			}
 			for i := range state.Notifications {
 				if state.Notifications[i].ref == ref {
@@ -795,6 +790,8 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 	case URLOpenFailedEvent:
 		state.Status = "open failed: " + e.Err
 	}
+
+	dispatchTimelineLoads(&state, &effects)
 
 	queueSelectedDetailDiff(&state, &effects)
 	if state.Focus != focusBefore {
@@ -893,6 +890,17 @@ func handleMouseClick(state *AppState, effects *[]Effect, event MouseClickEvent)
 		}
 	}
 	return *state
+}
+
+func timelineEventMatches(state AppState, generation int, ref string) bool {
+	if generation == state.TimelineLoadGenByRef[ref] && generation != 0 {
+		return true
+	}
+	expectedRef := state.TimelineLoadingRef
+	if expectedRef == "" {
+		expectedRef = state.CurrentRef
+	}
+	return generation == state.TimelineGen && ref == expectedRef
 }
 
 func ensureTimelineState(state *AppState, ref string) {
@@ -2283,6 +2291,7 @@ func ensureNotificationSelectionVisible(state *AppState) {
 	}
 	timeColWidth := notificationTimeColumnWidth(visible)
 	kindColWidth := notificationKindColumnWidthForState(*state, visible)
+	authorColWidth := notificationAuthorColumnWidth(visible)
 	repoColWidth := notificationRepoColumnWidth(visible)
 	state.NotifScroll = clampWrappedScroll(state.NotifScroll, state.NotifSelected, len(visible), viewport, func(i int) int {
 		if i < 0 || i >= len(visible) {
@@ -2290,9 +2299,10 @@ func ensureNotificationSelectionVisible(state *AppState) {
 		}
 		prefix := padToDisplayWidth(timeAgo(visible[i].updatedAt), timeColWidth) + " "
 		kind := padToDisplayWidth(notificationKindLabelForNotification(*state, visible[i]), kindColWidth)
+		author := padToDisplayWidth(clampDisplayWidth(oneLine(visible[i].author), authorColWidth), authorColWidth)
 		repo := padToDisplayWidth(clampDisplayWidth(oneLine(visible[i].repo), repoColWidth), repoColWidth)
-		label := prefix + kind + " " + repo + "  " + oneLine(visible[i].title)
-		titleIndent := strings.Repeat(" ", lipgloss.Width(prefix)+kindColWidth+1+repoColWidth+2)
+		label := prefix + kind + " " + author + " " + repo + "  " + oneLine(visible[i].title)
+		titleIndent := strings.Repeat(" ", lipgloss.Width(prefix)+kindColWidth+1+authorColWidth+1+repoColWidth+2)
 		return len(wrapDisplayWidth(label, avail, titleIndent))
 	})
 }
@@ -2590,39 +2600,223 @@ func selectNotificationByID(state *AppState, effects *[]Effect, id string) {
 	state.NotifSelected = indexOfNotificationByID(visible, id)
 	state.SelectedNotif = id
 	state.setCurrentRefFromSelectedNotification()
+	refChanged := state.CurrentRef != prevRef
+	if refChanged && !state.RefreshInFlight {
+		state.TimelineGen++
+		if strings.TrimSpace(prevRef) != "" {
+			*effects = append(*effects, CancelTimelineEffect{Ref: prevRef})
+		}
+	}
 	ensureNotificationSelectionVisible(state)
 	if state.RefreshInFlight {
 		if state.CurrentRef != "" {
 			ensureTimelineState(state, state.CurrentRef)
 		}
+		enqueueAllTimelineLoadsByPriority(state)
 		return
-	}
-	if state.ReadThroughRef != "" && state.TimelineLoadingRef == state.ReadThroughRef {
-		if state.CurrentRef != "" {
-			ensureTimelineState(state, state.CurrentRef)
-		}
-		return
-	}
-	if state.CurrentRef != prevRef {
-		state.TimelineGen++
-		*effects = append(*effects, CancelTimelineEffect{})
 	}
 	if state.CurrentRef == "" {
+		enqueueAllTimelineLoadsByPriority(state)
 		return
 	}
 	ensureTimelineState(state, state.CurrentRef)
 	ts := state.TimelineByRef[state.CurrentRef]
 	queueReadStateLoadsForUnknown(ts, state.CurrentRef, effects)
-	if !ts.done {
-		if state.CurrentRef == prevRef {
-			state.TimelineGen++
+	enqueueAllTimelineLoadsByPriority(state)
+}
+
+func enqueueAllTimelineLoadsByPriority(state *AppState) {
+	if state == nil {
+		return
+	}
+	if state.TimelineLoadPendingByRef == nil {
+		state.TimelineLoadPendingByRef = make(map[string]bool)
+	}
+	if state.TimelineLoadInFlightByRef == nil {
+		state.TimelineLoadInFlightByRef = make(map[string]bool)
+	}
+	ordered := prioritizedTimelineRefs(*state)
+	orderedSet := make(map[string]bool, len(ordered))
+	newQueue := make([]string, 0, len(ordered))
+
+	for _, ref := range ordered {
+		orderedSet[ref] = true
+		ensureTimelineState(state, ref)
+		ts := state.TimelineByRef[ref]
+		if ts == nil || ts.done || state.TimelineLoadInFlightByRef[ref] {
+			delete(state.TimelineLoadPendingByRef, ref)
+			continue
 		}
-		state.TimelineLoadingRef = state.CurrentRef
-		*effects = append(*effects, StartTimelineEffect{Generation: state.TimelineGen, Ref: state.CurrentRef})
+		state.TimelineLoadPendingByRef[ref] = true
+		newQueue = append(newQueue, ref)
+	}
+
+	for ref := range state.TimelineLoadPendingByRef {
+		if orderedSet[ref] {
+			continue
+		}
+		ensureTimelineState(state, ref)
+		ts := state.TimelineByRef[ref]
+		if ts == nil || ts.done || state.TimelineLoadInFlightByRef[ref] {
+			delete(state.TimelineLoadPendingByRef, ref)
+			continue
+		}
+		newQueue = append(newQueue, ref)
+	}
+
+	state.TimelineLoadQueue = newQueue
+	remaining := len(state.TimelineLoadQueue) + len(state.TimelineLoadInFlightByRef)
+	if remaining == 0 {
+		state.TimelineLoadTotal = 0
+	} else if state.TimelineLoadTotal < remaining {
+		state.TimelineLoadTotal = remaining
+	}
+}
+
+func prioritizedTimelineRefs(state AppState) []string {
+	ordered := make([]string, 0, len(state.Notifications)+1)
+	seen := make(map[string]bool, len(state.Notifications)+1)
+	add := func(ref string) {
+		ref = strings.TrimSpace(ref)
+		if ref == "" || seen[ref] {
+			return
+		}
+		seen[ref] = true
+		ordered = append(ordered, ref)
+	}
+
+	add(state.CurrentRef)
+
+	visible := state.visibleNotifications()
+	selected := indexOfNotificationByID(visible, state.SelectedNotif)
+	if selected >= 0 {
+		for d := 1; d <= len(visible); d++ {
+			up := selected - d
+			down := selected + d
+			if up >= 0 {
+				add(visible[up].ref)
+			}
+			if down < len(visible) {
+				add(visible[down].ref)
+			}
+		}
+	}
+
+	for _, n := range state.Notifications {
+		add(n.ref)
+	}
+
+	return ordered
+}
+
+func enqueueTimelineLoad(state *AppState, ref string, force bool) {
+	if state == nil {
+		return
+	}
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return
+	}
+	ensureTimelineState(state, ref)
+	if state.TimelineLoadPendingByRef == nil {
+		state.TimelineLoadPendingByRef = make(map[string]bool)
+	}
+	if state.TimelineLoadInFlightByRef == nil {
+		state.TimelineLoadInFlightByRef = make(map[string]bool)
+	}
+	ts := state.TimelineByRef[ref]
+	if ts == nil {
+		return
+	}
+	if !force && ts.done {
+		return
+	}
+	if state.TimelineLoadInFlightByRef[ref] {
+		return
+	}
+	if state.TimelineLoadPendingByRef[ref] {
+		return
+	}
+	state.TimelineLoadPendingByRef[ref] = true
+	state.TimelineLoadQueue = append(state.TimelineLoadQueue, ref)
+	remaining := len(state.TimelineLoadQueue) + len(state.TimelineLoadInFlightByRef)
+	if state.TimelineLoadTotal < remaining {
+		state.TimelineLoadTotal = remaining
+	}
+}
+
+func dispatchTimelineLoads(state *AppState, effects *[]Effect) {
+	if state == nil {
+		return
+	}
+	if state.ReadThroughRef != "" {
+		if !state.TimelineLoadInFlightByRef[state.ReadThroughRef] {
+			enqueueTimelineLoad(state, state.ReadThroughRef, true)
+		}
+	}
+	if state.RefreshInFlight && state.RefreshStage == "timeline" {
+		for _, ref := range state.RefreshQueue {
+			if !state.TimelineLoadInFlightByRef[ref] {
+				enqueueTimelineLoad(state, ref, true)
+			}
+		}
+	}
+
+	inFlight := len(state.TimelineLoadInFlightByRef)
+	for inFlight < timelineWorkerCount && len(state.TimelineLoadQueue) > 0 {
+		pick := -1
+		for i, ref := range state.TimelineLoadQueue {
+			if state.ReadThroughRef != "" && ref != state.ReadThroughRef {
+				continue
+			}
+			if state.RefreshInFlight && state.RefreshStage == "timeline" && !refreshQueueContains(*state, ref) {
+				continue
+			}
+			if state.TimelineLoadInFlightByRef[ref] {
+				continue
+			}
+			ts := state.TimelineByRef[ref]
+			if ts == nil || ts.done {
+				delete(state.TimelineLoadPendingByRef, ref)
+				continue
+			}
+			pick = i
+			break
+		}
+		if pick < 0 {
+			break
+		}
+		ref := state.TimelineLoadQueue[pick]
+		state.TimelineLoadQueue = append(state.TimelineLoadQueue[:pick], state.TimelineLoadQueue[pick+1:]...)
+		delete(state.TimelineLoadPendingByRef, ref)
+		ts := state.TimelineByRef[ref]
+		if ts == nil || ts.done {
+			continue
+		}
+		state.TimelineLoadGenByRef[ref] = state.TimelineLoadGenByRef[ref] + 1
+		gen := state.TimelineLoadGenByRef[ref]
+		state.TimelineLoadInFlightByRef[ref] = true
 		ts.loading = true
 		ts.done = false
 		ts.err = ""
+		if state.TimelineLoadingRef == "" || ref == state.CurrentRef {
+			state.TimelineLoadingRef = ref
+		}
+		*effects = append(*effects, StartTimelineEffect{Generation: gen, Ref: ref})
+		inFlight++
 	}
+	if len(state.TimelineLoadQueue)+len(state.TimelineLoadInFlightByRef) == 0 {
+		state.TimelineLoadTotal = 0
+	}
+}
+
+func refreshQueueContains(state AppState, ref string) bool {
+	for _, queued := range state.RefreshQueue {
+		if queued == ref {
+			return true
+		}
+	}
+	return false
 }
 
 func beginReadThrough(state *AppState, effects *[]Effect, ref string, ts *timelineState, desiredRead bool) {
@@ -2651,18 +2845,10 @@ func beginReadThrough(state *AppState, effects *[]Effect, ref string, ts *timeli
 		clear(state.ReadThroughIDs)
 	}
 
-	if state.TimelineLoadingRef == ref {
+	if state.TimelineLoadInFlightByRef[ref] {
 		return
 	}
-	state.TimelineGen++
-	state.TimelineLoadingRef = ref
-	ts.loading = true
-	ts.done = false
-	ts.err = ""
-	*effects = append(*effects,
-		CancelTimelineEffect{},
-		StartTimelineEffect{Generation: state.TimelineGen, Ref: ref},
-	)
+	enqueueTimelineLoad(state, ref, true)
 }
 
 func queueParentReadStateLoadsForRefs(state *AppState, effects *[]Effect, refs []string) {
@@ -2843,12 +3029,7 @@ func resumeSelectedTimelineAfterReadThrough(state *AppState, effects *[]Effect, 
 	if ts == nil || ts.done {
 		return
 	}
-	state.TimelineGen++
-	state.TimelineLoadingRef = state.CurrentRef
-	ts.loading = true
-	ts.done = false
-	ts.err = ""
-	*effects = append(*effects, StartTimelineEffect{Generation: state.TimelineGen, Ref: state.CurrentRef})
+	enqueueTimelineLoad(state, state.CurrentRef, true)
 }
 
 func queueReadStateLoadsForUnknown(ts *timelineState, ref string, effects *[]Effect) {
@@ -2967,10 +3148,14 @@ func beginRefresh(state *AppState, effects *[]Effect) {
 
 	state.RefreshInFlight = true
 	state.RefreshPending = false
-	state.RefreshStage = ""
+	state.RefreshStage = "timeline"
 	state.RefreshQueue = refreshTimelineRefs(*state)
 	state.RefreshTotalRefs = len(state.RefreshQueue)
-	state.RefreshActiveRef = ""
+	if len(state.RefreshQueue) > 0 {
+		state.RefreshActiveRef = state.RefreshQueue[0]
+	} else {
+		state.RefreshActiveRef = ""
+	}
 	state.RefreshSpinnerIndex = 0
 	state.RefreshNotifAnchorID = state.SelectedNotif
 	state.RefreshNotifAnchorIndex = state.NotifSelected
@@ -2987,6 +3172,10 @@ func beginRefresh(state *AppState, effects *[]Effect) {
 	if state.RefreshTimelineAnchorByRef == nil {
 		state.RefreshTimelineAnchorByRef = make(map[string]timelineRefreshAnchor)
 	}
+	for _, ref := range state.RefreshQueue {
+		prepareTimelineRefresh(state, ref)
+		enqueueTimelineLoad(state, ref, true)
+	}
 
 	*effects = append(*effects, ScheduleRefreshSpinnerTickEffect{})
 	startNextRefreshStep(state, effects)
@@ -2997,19 +3186,11 @@ func startNextRefreshStep(state *AppState, effects *[]Effect) {
 		return
 	}
 
-	if len(state.RefreshQueue) > 0 {
-		ref := state.RefreshQueue[0]
-		state.RefreshQueue = state.RefreshQueue[1:]
-		prepareTimelineRefresh(state, ref)
-		state.TimelineGen++
-		state.TimelineLoadingRef = ref
-		state.RefreshStage = "timeline"
-		state.RefreshActiveRef = ref
-		*effects = append(*effects, CancelTimelineEffect{}, StartTimelineEffect{Generation: state.TimelineGen, Ref: ref})
-		return
-	}
-
-	if state.RefreshStage != "notifications" {
+	if state.RefreshStage == "timeline" {
+		if len(state.RefreshQueue) > 0 {
+			return
+		}
+		state.RefreshActiveRef = ""
 		state.RefreshStage = "notifications"
 		state.NotifGen++
 		state.NotifLoading = true
@@ -3022,6 +3203,10 @@ func startNextRefreshStep(state *AppState, effects *[]Effect) {
 			delete(state.RefreshNotifSeen, k)
 		}
 		*effects = append(*effects, StartNotificationsEffect{Generation: state.NotifGen})
+		return
+	}
+
+	if state.RefreshStage == "notifications" {
 		return
 	}
 
@@ -3065,6 +3250,27 @@ func refreshTimelineRefs(state AppState) []string {
 	sort.Strings(others)
 	refs = append(refs, others...)
 	return refs
+}
+
+func markRefreshTimelineRefComplete(state *AppState, ref string) {
+	if state == nil || ref == "" {
+		return
+	}
+	idx := -1
+	for i, queued := range state.RefreshQueue {
+		if queued == ref {
+			idx = i
+			break
+		}
+	}
+	if idx >= 0 {
+		state.RefreshQueue = append(state.RefreshQueue[:idx], state.RefreshQueue[idx+1:]...)
+	}
+	if len(state.RefreshQueue) > 0 {
+		state.RefreshActiveRef = state.RefreshQueue[0]
+	} else {
+		state.RefreshActiveRef = ""
+	}
 }
 
 func prepareTimelineRefresh(state *AppState, ref string) {
