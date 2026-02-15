@@ -245,6 +245,7 @@ func (m *model) renderNotifications(width, height int) string {
 	}
 	timeColWidth := notificationTimeColumnWidth(visible)
 	kindColWidth := notificationKindColumnWidthForState(m.state, visible)
+	authorColWidth := notificationAuthorColumnWidth(visible)
 	repoColWidth := notificationRepoColumnWidth(visible)
 	for i := start; i < end; i++ {
 		n := visible[i]
@@ -253,13 +254,21 @@ func (m *model) renderNotifications(width, height int) string {
 		draftPR := strings.TrimSpace(n.kind) == "pr" && m.state.ReviewReqDraftByRef[n.ref]
 		prefix := marker + padToDisplayWidth(timeAgo(n.updatedAt), timeColWidth) + " "
 		kind := padToDisplayWidth(notificationKindLabelForNotification(m.state, n), kindColWidth)
+		author := padToDisplayWidth(clampDisplayWidth(oneLine(n.author), authorColWidth), authorColWidth)
 		repo := padToDisplayWidth(clampDisplayWidth(oneLine(n.repo), repoColWidth), repoColWidth)
-		label := prefix + kind + " " + repo + "  " + oneLine(n.title)
+		label := prefix + kind + " "
+		if authorColWidth > 0 {
+			label += author + " "
+		}
+		label += repo + "  " + oneLine(n.title)
 		avail := paneContentWidthWithRelativeNumbers(width, height)
 		if avail < 1 {
 			avail = 1
 		}
 		indentWidth := lipgloss.Width(prefix) + kindColWidth + 1 + repoColWidth + 2
+		if authorColWidth > 0 {
+			indentWidth += authorColWidth + 1
+		}
 		minContinuationWidth := 12
 		maxIndent := avail - minContinuationWidth
 		if maxIndent < 0 {
@@ -385,6 +394,20 @@ func notificationRepoColumnWidth(rows []notifRow) int {
 	}
 	if width > 36 {
 		return 36
+	}
+	return width
+}
+
+func notificationAuthorColumnWidth(rows []notifRow) int {
+	width := 0
+	for i := range rows {
+		w := lipgloss.Width(oneLine(rows[i].author))
+		if w > width {
+			width = w
+		}
+	}
+	if width > 20 {
+		return 20
 	}
 	return width
 }

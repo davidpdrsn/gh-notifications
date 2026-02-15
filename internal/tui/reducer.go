@@ -92,6 +92,7 @@ type ReviewReqStateLoadedEvent struct {
 	MergedRefs  []string
 	ClosedRefs  []string
 	DraftRefs   []string
+	AuthorByRef map[string]string
 }
 
 type ReviewReqStateLoadFailedEvent struct {
@@ -422,6 +423,7 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 				delete(state.ReviewReqMergedByRef, e.Item.Target.Ref)
 				delete(state.ReviewReqClosedByRef, e.Item.Target.Ref)
 				delete(state.ReviewReqDraftByRef, e.Item.Target.Ref)
+				delete(state.AuthorByRef, e.Item.Target.Ref)
 				delete(state.ReviewReqLoadedByRef, e.Item.Target.Ref)
 				delete(state.ReviewReqLoadInFlightByRef, e.Item.Target.Ref)
 				invalidateNotifMarkerCacheForRef(&state, e.Item.Target.Ref)
@@ -710,6 +712,17 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 				state.ReviewReqDraftByRef[ref] = true
 			} else {
 				delete(state.ReviewReqDraftByRef, ref)
+			}
+			author := strings.TrimSpace(e.AuthorByRef[ref])
+			if author != "" {
+				state.AuthorByRef[ref] = author
+			} else {
+				delete(state.AuthorByRef, ref)
+			}
+			for i := range state.Notifications {
+				if state.Notifications[i].ref == ref {
+					state.Notifications[i].author = author
+				}
 			}
 			invalidateNotifMarkerCacheForRef(&state, ref)
 		}
@@ -3117,6 +3130,7 @@ func insertRefreshNotification(state *AppState, item ghpr.NotificationEvent) {
 		title:     item.Subject.Title,
 		repo:      item.Repository.Owner + "/" + item.Repository.Repo,
 		kind:      item.Target.Kind,
+		author:    strings.TrimSpace(state.AuthorByRef[item.Target.Ref]),
 		ref:       item.Target.Ref,
 	}
 	idx := sort.Search(len(state.RefreshNotifBuffer), func(i int) bool {

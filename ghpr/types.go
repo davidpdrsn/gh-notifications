@@ -85,4 +85,5 @@ type ReviewRequestStatus struct {
 	Merged  bool
 	Closed  bool
 	Draft   bool
+	Author  string
 }

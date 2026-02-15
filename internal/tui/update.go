@@ -100,6 +100,7 @@ type reviewReqStateLoadedMsg struct {
 	mergedRefs  []string
 	closedRefs  []string
 	draftRefs   []string
+	authorByRef map[string]string
 }
 
 type reviewReqStateLoadErrMsg struct {
@@ -229,7 +230,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		events = append(events, ViewerLoadFailedEvent{Err: t.err.Error()})
 	case reviewReqStateLoadedMsg:
 		asyncMsg = true
-		events = append(events, ReviewReqStateLoadedEvent{Refs: t.refs, PendingRefs: t.pendingRefs, MergedRefs: t.mergedRefs, ClosedRefs: t.closedRefs, DraftRefs: t.draftRefs})
+		events = append(events, ReviewReqStateLoadedEvent{Refs: t.refs, PendingRefs: t.pendingRefs, MergedRefs: t.mergedRefs, ClosedRefs: t.closedRefs, DraftRefs: t.draftRefs, AuthorByRef: t.authorByRef})
 	case reviewReqStateLoadErrMsg:
 		asyncMsg = true
 		events = append(events, ReviewReqStateLoadFailedEvent{Refs: t.refs, Err: t.err.Error()})
@@ -480,6 +481,7 @@ func (m *model) startReviewReqStateLoader(refs []string) {
 		merged := make([]string, 0, len(refs))
 		closed := make([]string, 0, len(refs))
 		draft := make([]string, 0, len(refs))
+		authorByRef := make(map[string]string, len(refs))
 		for _, ref := range refs {
 			ref = strings.TrimSpace(ref)
 			if ref == "" {
@@ -502,8 +504,11 @@ func (m *model) startReviewReqStateLoader(refs []string) {
 			if status.Draft {
 				draft = append(draft, ref)
 			}
+			if author := strings.TrimSpace(status.Author); author != "" {
+				authorByRef[ref] = author
+			}
 		}
-		m.msgCh <- reviewReqStateLoadedMsg{refs: refs, pendingRefs: pending, mergedRefs: merged, closedRefs: closed, draftRefs: draft}
+		m.msgCh <- reviewReqStateLoadedMsg{refs: refs, pendingRefs: pending, mergedRefs: merged, closedRefs: closed, draftRefs: draft, authorByRef: authorByRef}
 	}()
 }
 

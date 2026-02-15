@@ -811,6 +811,28 @@ func TestRenderNotificationsShowsLowercaseKindLabels(t *testing.T) {
 	}
 }
 
+func TestRenderNotificationsShowsAuthorColumnWhenPresent(t *testing.T) {
+	m := newModel(context.Background(), nil, nil)
+	m.state.Width = 100
+	m.state.Height = 20
+	m.state.Notifications = []notifRow{
+		{id: "n1", repo: "owner/repo", kind: "pr", author: "alice", ref: "owner/repo#1", title: "first", updatedAt: time.Now().UTC()},
+		{id: "n2", repo: "owner/repo", kind: "pr", author: "bob", ref: "owner/repo#2", title: "second", updatedAt: time.Now().UTC().Add(-time.Minute)},
+	}
+	m.state.rebuildNotifIndex()
+	m.state.SelectedNotif = "n1"
+	m.state.NotifSelected = 0
+
+	leftW, _, _ := paneWidths(panesTotalWidth(m.state.Width, m.state.Focus, m.state.currentPaneMode()), m.state.Focus, m.state.currentPaneMode())
+	out := m.renderNotifications(leftW, paneInnerHeight(m.state))
+	if !strings.Contains(out, "alice") {
+		t.Fatalf("expected first author in notifications output")
+	}
+	if !strings.Contains(out, "bob") {
+		t.Fatalf("expected second author in notifications output")
+	}
+}
+
 func TestRenderNotificationsHighlightsWaitingOnMyReviewPR(t *testing.T) {
 	m := newModel(context.Background(), nil, nil)
 	m.state.Width = 100

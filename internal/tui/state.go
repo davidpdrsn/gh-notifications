@@ -33,6 +33,7 @@ type notifRow struct {
 	title     string
 	repo      string
 	kind      string
+	author    string
 	ref       string
 }
 
@@ -172,6 +173,7 @@ type AppState struct {
 	ReviewReqMergedByRef        map[string]bool
 	ReviewReqClosedByRef        map[string]bool
 	ReviewReqDraftByRef         map[string]bool
+	AuthorByRef                 map[string]string
 	ReviewReqLoadedByRef        map[string]bool
 	ReviewReqLoadInFlightByRef  map[string]bool
 }
@@ -232,6 +234,7 @@ func NewState() AppState {
 		ReviewReqMergedByRef:        make(map[string]bool),
 		ReviewReqClosedByRef:        make(map[string]bool),
 		ReviewReqDraftByRef:         make(map[string]bool),
+		AuthorByRef:                 make(map[string]string),
 		ReviewReqLoadedByRef:        make(map[string]bool),
 		ReviewReqLoadInFlightByRef:  make(map[string]bool),
 	}
@@ -449,6 +452,7 @@ func (s *AppState) insertNotification(item ghpr.NotificationEvent) bool {
 		title:     item.Subject.Title,
 		repo:      fmt.Sprintf("%s/%s", item.Repository.Owner, item.Repository.Repo),
 		kind:      item.Target.Kind,
+		author:    strings.TrimSpace(s.AuthorByRef[item.Target.Ref]),
 		ref:       item.Target.Ref,
 	}
 	if _, exists := s.NotifIndexByID[row.id]; exists {
