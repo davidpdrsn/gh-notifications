@@ -64,6 +64,7 @@ type styles struct {
 	eventSuccess    lipgloss.Style
 	eventWarning    lipgloss.Style
 	eventDanger     lipgloss.Style
+	confirmOverlay  lipgloss.Style
 	diffHeader      lipgloss.Style
 	diffHunk        lipgloss.Style
 	diffAdd         lipgloss.Style
@@ -129,10 +130,14 @@ func newModel(ctx context.Context, client *ghpr.Client, store *readstate.Store) 
 			eventSuccess:   lipgloss.NewStyle().Foreground(t.success),
 			eventWarning:   lipgloss.NewStyle().Foreground(t.warning),
 			eventDanger:    lipgloss.NewStyle().Foreground(t.danger),
-			diffHeader:     lipgloss.NewStyle().Foreground(t.info),
-			diffHunk:       lipgloss.NewStyle().Foreground(t.warning),
-			diffAdd:        lipgloss.NewStyle().Foreground(t.success),
-			diffDel:        lipgloss.NewStyle().Foreground(t.danger),
+			confirmOverlay: lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#11111b")).
+				Background(t.success).
+				Bold(true),
+			diffHeader: lipgloss.NewStyle().Foreground(t.info),
+			diffHunk:   lipgloss.NewStyle().Foreground(t.warning),
+			diffAdd:    lipgloss.NewStyle().Foreground(t.success),
+			diffDel:    lipgloss.NewStyle().Foreground(t.danger),
 			lineNumber: lipgloss.NewStyle().
 				Foreground(lipgloss.Color("#8A8FA8")).
 				Background(lipgloss.Color("#2B2F45")),
@@ -160,6 +165,10 @@ func (m *model) bottomStatus() string {
 	parts := make([]string, 0, 3)
 	if strings.TrimSpace(m.state.Status) != "" {
 		parts = append(parts, m.state.Status)
+	}
+	if m.state.ConfirmIntent != nil && !m.confirmIntentVisibleInNotificationsPane() {
+		targets := confirmIntentTargetSet(m.state.ConfirmIntent)
+		parts = append(parts, fmt.Sprintf("%s %d selected [a] confirm [esc] cancel", confirmActionDisplayName(m.state.ConfirmIntent.Kind), len(targets)))
 	}
 	if m.state.RefreshInFlight {
 		spinnerFrames := []string{"-", "\\", "|", "/"}
@@ -195,6 +204,46 @@ func (m *model) bottomStatus() string {
 		return clampDisplayWidth(right, avail)
 	}
 	return right
+}
+
+func (m *model) confirmIntentVisibleInNotificationsPane() bool {
+	if m == nil || m.state.ConfirmIntent == nil {
+		return false
+	}
+	mode := m.state.currentPaneMode()
+	leftW, _, _ := paneWidths(panesTotalWidth(m.state.Width, m.state.Focus, mode), m.state.Focus, mode)
+	if leftW <= 0 {
+		return false
+	}
+	visible := m.state.visibleNotifications()
+	if len(visible) == 0 {
+		return false
+	}
+	targets := confirmIntentTargetSet(m.state.ConfirmIntent)
+	if len(targets) == 0 {
+		return false
+	}
+	height := paneInnerHeight(m.state)
+	if height < 1 {
+		height = 1
+	}
+	start := m.state.NotifScroll
+	if start < 0 {
+		start = 0
+	}
+	if start >= len(visible) {
+		start = len(visible) - 1
+	}
+	end := start + max(1, height-1)
+	if end > len(visible) {
+		end = len(visible)
+	}
+	for i := start; i < end; i++ {
+		if targets[visible[i].id] {
+			return true
+		}
+	}
+	return false
 }
 
 func relativeRefreshAge(ts time.Time) string {

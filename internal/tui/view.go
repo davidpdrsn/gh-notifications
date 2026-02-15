@@ -66,9 +66,6 @@ func (m *model) View() string {
 	if m.state.HelpOpen {
 		return overlayModalCentered(base, m.renderHelpModal(), m.state.Width, m.state.Height)
 	}
-	if m.state.ArchiveConfirm != nil {
-		return overlayModalCentered(base, m.renderArchiveConfirmModal(), m.state.Width, m.state.Height)
-	}
 	return base
 }
 
@@ -138,19 +135,6 @@ func (m *model) renderHelpBindingSection(title string, bindings []helpBinding) s
 	return lipgloss.JoinVertical(lipgloss.Left, lines...)
 }
 
-func (m *model) renderArchiveConfirmModal() string {
-	title := m.styles.title.Render("Archive notification?")
-	body := m.styles.text.Render("Press a again to confirm.")
-	hint := m.styles.muted.Render("Press esc to cancel.")
-	content := lipgloss.JoinVertical(lipgloss.Left, title, "", body, hint)
-	box := lipgloss.NewStyle().
-		Border(lipgloss.NormalBorder()).
-		Padding(1, 2).
-		MaxWidth(max(24, m.state.Width-4)).
-		Render(content)
-	return box
-}
-
 func overlayModalCentered(base, modal string, width, height int) string {
 	if strings.TrimSpace(modal) == "" {
 		return base
@@ -198,6 +182,50 @@ func overlayModalCentered(base, modal string, width, height int) string {
 	return strings.Join(baseLines, "\n")
 }
 
+func confirmPrimaryOverlayText(kind confirmActionKind, more int) string {
+	text := fmt.Sprintf("<< %s >> [a confirm | esc cancel]", confirmActionDisplayName(kind))
+	if more > 0 {
+		text += fmt.Sprintf(" +%d", more)
+	}
+	return text
+}
+
+func overlayLineLeft(base, overlay string, width int, tailStyle lipgloss.Style) string {
+	if width < 1 {
+		return ""
+	}
+	base = lipgloss.PlaceHorizontal(width, lipgloss.Left, base)
+	overlayW := xansi.StringWidth(overlay)
+	if overlayW <= 0 {
+		return base
+	}
+	if overlayW >= width {
+		return xansi.Cut(overlay, 0, width)
+	}
+	plainBase := stripANSIEscapes(base)
+	if xansi.StringWidth(plainBase) < width {
+		plainBase = lipgloss.PlaceHorizontal(width, lipgloss.Left, plainBase)
+	}
+	gap := 1
+	if overlayW+gap > width {
+		gap = 0
+	}
+	tailStart := overlayW + gap
+	tail := ""
+	if tailStart < width {
+		tail = tailStyle.Render(xansi.Cut(plainBase, tailStart, width))
+	}
+	if gap == 0 {
+		return overlay + tail
+	}
+	return overlay + " " + tail
+}
+
+func stripANSIEscapes(s string) string {
+	ansi := regexp.MustCompile(`\x1b\[[0-9;]*m`)
+	return ansi.ReplaceAllString(s, "")
+}
+
 func (m *model) stylePaneActivity(pane string, active bool) string {
 	if active {
 		return pane
@@ -243,6 +271,33 @@ func (m *model) renderNotifications(width, height int) string {
 	kindColWidth := notificationKindColumnWidthForState(m.state, visible)
 	authorColWidth := notificationAuthorColumnWidth(visible)
 	repoColWidth := notificationRepoColumnWidth(visible)
+	confirmTargets := confirmIntentTargetSet(m.state.ConfirmIntent)
+	primaryConfirmRow := -1
+	if len(confirmTargets) > 0 {
+		preferred := ""
+		if m.state.ConfirmIntent != nil {
+			preferred = strings.TrimSpace(m.state.ConfirmIntent.PrimaryNotifID)
+		}
+		for i := start; i < end; i++ {
+			if !confirmTargets[visible[i].id] {
+				continue
+			}
+			if primaryConfirmRow < 0 {
+				primaryConfirmRow = i
+			}
+			if preferred != "" && visible[i].id == preferred {
+				primaryConfirmRow = i
+				break
+			}
+		}
+	}
+	moreConfirmTargets := 0
+	if primaryConfirmRow >= 0 && len(confirmTargets) > 0 {
+		moreConfirmTargets = len(confirmTargets) - 1
+		if moreConfirmTargets < 0 {
+			moreConfirmTargets = 0
+		}
+	}
 	for i := start; i < end; i++ {
 		n := visible[i]
 		marker := m.state.notificationUnreadMarker(n)
@@ -276,16 +331,28 @@ func (m *model) renderNotifications(width, height int) string {
 		if current {
 			selectedRow = i
 		}
+		rendered := make([]string, 0, len(wrapped))
 		if current || marked {
 			for _, seg := range wrapped {
-				lines = append(lines, m.renderNotificationStyledLine(seg, avail, timeColWidth+5, kindColWidth, n.kind, waitingOnMe, draftPR, current, marked))
-				rowIndexByLine = append(rowIndexByLine, i)
+				rendered = append(rendered, m.renderNotificationStyledLine(seg, avail, timeColWidth+5, kindColWidth, n.kind, waitingOnMe, draftPR, current, marked))
 			}
 		} else {
 			for _, seg := range wrapped {
-				lines = append(lines, m.renderNotificationStyledLine(seg, avail, timeColWidth+5, kindColWidth, n.kind, waitingOnMe, draftPR, false, false))
-				rowIndexByLine = append(rowIndexByLine, i)
+				rendered = append(rendered, m.renderNotificationStyledLine(seg, avail, timeColWidth+5, kindColWidth, n.kind, waitingOnMe, draftPR, false, false))
 			}
+		}
+		if confirmTargets[n.id] && len(rendered) > 0 {
+			if i == primaryConfirmRow {
+				overlay := m.styles.confirmOverlay.Render(clampDisplayWidth(confirmPrimaryOverlayText(m.state.ConfirmIntent.Kind, moreConfirmTargets), avail))
+				rendered[0] = overlayLineLeft(rendered[0], overlay, avail, m.styles.muted.Strikethrough(true))
+			} else {
+				overlay := m.styles.muted.Render(clampDisplayWidth("<< "+confirmActionMarkerLabel(m.state.ConfirmIntent.Kind)+" >>", avail))
+				rendered[0] = overlayLineLeft(rendered[0], overlay, avail, m.styles.muted.Strikethrough(true))
+			}
+		}
+		for _, line := range rendered {
+			lines = append(lines, line)
+			rowIndexByLine = append(rowIndexByLine, i)
 		}
 	}
 	lines = m.applyRelativeLineNumbers(lines, rowIndexByLine, selectedRow, height)

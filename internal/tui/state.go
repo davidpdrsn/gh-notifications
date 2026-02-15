@@ -167,7 +167,7 @@ type AppState struct {
 	ReadThroughIDs              map[string]bool
 	MotionCount                 string
 	notifMarkerByRef            map[string]string
-	ArchiveConfirm              *archiveConfirmState
+	ConfirmIntent               *confirmIntentState
 	HelpOpen                    bool
 	MarkedNotifications         map[string]bool
 	MarkedTimelineByRef         map[string]map[string]bool
@@ -205,12 +205,17 @@ type pendingArchiveOp struct {
 	from     focusColumn
 }
 
-type archiveConfirmState struct {
-	notifID  string
-	notifIDs []string
-	ref      string
-	threadID string
-	from     focusColumn
+type confirmActionKind string
+
+const (
+	confirmActionArchive confirmActionKind = "archive"
+)
+
+type confirmIntentState struct {
+	Kind           confirmActionKind
+	TargetNotifIDs []string
+	PrimaryNotifID string
+	From           focusColumn
 }
 
 func NewState() AppState {

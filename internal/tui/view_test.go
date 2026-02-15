@@ -149,18 +149,66 @@ func TestTeaProgramLoopChangesFocusedPaneWidth(t *testing.T) {
 	}
 }
 
-func TestViewShowsArchiveConfirmationModal(t *testing.T) {
+func TestViewShowsInlineArchiveConfirmationIntent(t *testing.T) {
 	m := newModel(context.Background(), nil, nil)
 	m.state.Width = 80
 	m.state.Height = 20
-	m.state.ArchiveConfirm = &archiveConfirmState{notifID: "42", ref: "o/r#1", threadID: "42", from: focusNotifications}
+	m.state.NotifLoading = false
+	m.state.Notifications = []notifRow{{id: "42", repo: "o/r", title: "title", ref: "o/r#1", updatedAt: time.Now().UTC()}}
+	m.state.rebuildNotifIndex()
+	m.state.SelectedNotif = "42"
+	m.state.NotifSelected = 0
+	m.state.ConfirmIntent = &confirmIntentState{Kind: confirmActionArchive, TargetNotifIDs: []string{"42"}, PrimaryNotifID: "42", From: focusNotifications}
 
 	out := m.View()
-	if !strings.Contains(out, "Archive notification?") {
-		t.Fatalf("expected archive confirmation modal title")
+	if !strings.Contains(out, "<< archive >> [a confirm | esc cancel]") {
+		t.Fatalf("expected inline archive confirmation prompt")
 	}
-	if !strings.Contains(out, "Press a again to confirm.") {
-		t.Fatalf("expected archive confirmation modal instructions")
+	if strings.Contains(out, "Archive notification?") {
+		t.Fatalf("expected centered archive modal to be removed")
+	}
+}
+
+func TestViewShowsMarkersForNonContiguousArchiveTargets(t *testing.T) {
+	m := newModel(context.Background(), nil, nil)
+	m.state.Width = 100
+	m.state.Height = 20
+	m.state.NotifLoading = false
+	m.state.Notifications = []notifRow{
+		{id: "1", repo: "o/r", title: "one", ref: "o/r#1", updatedAt: time.Now().UTC()},
+		{id: "2", repo: "o/r", title: "two", ref: "o/r#2", updatedAt: time.Now().UTC().Add(-time.Minute)},
+		{id: "3", repo: "o/r", title: "three", ref: "o/r#3", updatedAt: time.Now().UTC().Add(-2 * time.Minute)},
+		{id: "4", repo: "o/r", title: "four", ref: "o/r#4", updatedAt: time.Now().UTC().Add(-3 * time.Minute)},
+	}
+	m.state.rebuildNotifIndex()
+	m.state.SelectedNotif = "1"
+	m.state.NotifSelected = 0
+	m.state.ConfirmIntent = &confirmIntentState{Kind: confirmActionArchive, TargetNotifIDs: []string{"1", "3", "4"}, PrimaryNotifID: "1", From: focusNotifications}
+
+	out := m.View()
+	if !strings.Contains(out, "<< archive >> [a confirm | esc cancel] +2") {
+		t.Fatalf("expected primary archive prompt with remaining count")
+	}
+	if strings.Count(out, "<< archive target >>") < 2 {
+		t.Fatalf("expected markers for additional non-contiguous targets")
+	}
+}
+
+func TestBottomBarShowsConfirmPromptWhenNotificationsPaneHidden(t *testing.T) {
+	m := newModel(context.Background(), nil, nil)
+	m.state.Width = 100
+	m.state.Height = 20
+	m.state.Focus = focusTimeline
+	m.state.CurrentRef = "o/r#1"
+	m.state.Notifications = []notifRow{{id: "1", repo: "o/r", title: "one", ref: "o/r#1", updatedAt: time.Now().UTC()}}
+	m.state.rebuildNotifIndex()
+	m.state.SelectedNotif = "1"
+	m.state.NotifSelected = 0
+	m.state.ConfirmIntent = &confirmIntentState{Kind: confirmActionArchive, TargetNotifIDs: []string{"1"}, PrimaryNotifID: "1", From: focusTimeline}
+
+	out := m.View()
+	if !strings.Contains(out, "archive 1 selected [a] confirm [esc] cancel") {
+		t.Fatalf("expected bottom-bar fallback confirmation prompt when notification pane hidden")
 	}
 }
 

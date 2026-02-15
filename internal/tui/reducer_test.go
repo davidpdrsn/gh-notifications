@@ -2722,11 +2722,11 @@ func TestArchiveKeyOpensConfirmFromNonNotificationPanes(t *testing.T) {
 
 			next, effects := Reduce(state, KeyEvent{Key: "a"})
 
-			if next.ArchiveConfirm == nil {
+			if next.ConfirmIntent == nil {
 				t.Fatalf("expected archive confirm to open")
 			}
-			if next.ArchiveConfirm.threadID != "42" {
-				t.Fatalf("expected target thread id 42, got %q", next.ArchiveConfirm.threadID)
+			if len(next.ConfirmIntent.TargetNotifIDs) != 1 || next.ConfirmIntent.TargetNotifIDs[0] != "42" {
+				t.Fatalf("expected target notif id 42, got %+v", next.ConfirmIntent.TargetNotifIDs)
 			}
 			if len(effects) != 0 {
 				t.Fatalf("expected no side effects before confirmation, got %d", len(effects))
@@ -2758,7 +2758,7 @@ func TestArchiveConfirmMarksReadAndRemovesNotificationOnSuccess(t *testing.T) {
 	next, _ := Reduce(state, KeyEvent{Key: "a"})
 	next, effects := Reduce(next, KeyEvent{Key: "a"})
 
-	if next.ArchiveConfirm != nil {
+	if next.ConfirmIntent != nil {
 		t.Fatalf("expected archive confirm to close after confirmation")
 	}
 	foundArchive := false
@@ -2806,7 +2806,7 @@ func TestArchiveConfirmCancelWithEscClosesModal(t *testing.T) {
 	next, _ := Reduce(state, KeyEvent{Key: "a"})
 	next, effects := Reduce(next, KeyEvent{Key: "esc"})
 
-	if next.ArchiveConfirm != nil {
+	if next.ConfirmIntent != nil {
 		t.Fatalf("expected archive confirm to close on esc")
 	}
 	if len(effects) != 0 {
@@ -2843,7 +2843,7 @@ func TestArchiveFailureKeepsNotificationAndRestoresFocus(t *testing.T) {
 	if next.Focus != focusTimeline {
 		t.Fatalf("expected focus restored to timeline, got %v", next.Focus)
 	}
-	if next.ArchiveConfirm != nil {
+	if next.ConfirmIntent != nil {
 		t.Fatalf("expected modal closed after failure")
 	}
 }
@@ -2855,7 +2855,7 @@ func TestArchiveKeyWithoutTargetShowsStatus(t *testing.T) {
 
 	next, effects := Reduce(state, KeyEvent{Key: "a"})
 
-	if next.ArchiveConfirm != nil {
+	if next.ConfirmIntent != nil {
 		t.Fatalf("expected archive confirm not to open")
 	}
 	if next.Status != "nothing to archive" {
@@ -2878,7 +2878,7 @@ func TestArchiveKeyWhileArchivePendingDoesNotOpenModal(t *testing.T) {
 
 	next, effects := Reduce(state, KeyEvent{Key: "a"})
 
-	if next.ArchiveConfirm != nil {
+	if next.ConfirmIntent != nil {
 		t.Fatalf("expected archive confirm not to open when pending")
 	}
 	if next.Status != "archive already in progress" {
@@ -2904,7 +2904,7 @@ func TestArchiveBlockedWhenWaitingOnMyReview(t *testing.T) {
 
 	next, effects := Reduce(state, KeyEvent{Key: "a"})
 
-	if next.ArchiveConfirm != nil {
+	if next.ConfirmIntent != nil {
 		t.Fatalf("expected archive confirm to stay closed when waiting on review")
 	}
 	if next.Status != "cannot archive: waiting on your review" {

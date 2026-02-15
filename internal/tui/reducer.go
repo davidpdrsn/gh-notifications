@@ -297,17 +297,16 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 			}
 			break
 		}
-		if state.ArchiveConfirm != nil {
+		if state.ConfirmIntent != nil {
 			clearMotionCount(&state)
 			switch e.Key {
 			case "ctrl+c", "q":
 				state.Quit = true
 				effects = append(effects, CancelTimelineEffect{})
 			case "esc", "backspace":
-				closeArchiveConfirm(&state)
-				state.Status = "archive canceled"
+				cancelConfirmIntent(&state)
 			case "a":
-				confirmArchiveNotification(&state, &effects)
+				confirmActiveIntent(&state, &effects)
 			}
 			break
 		}
@@ -357,7 +356,7 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 			openSelectedInBrowser(&state, &effects)
 		case "a":
 			clearMotionCount(&state)
-			openArchiveConfirm(&state, &effects)
+			openConfirmIntent(&state, &effects, confirmActionArchive)
 		case "A", "shift+a", "shift+A":
 			clearMotionCount(&state)
 			toggleMarkAllInCurrentView(&state)
@@ -732,7 +731,7 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 		}
 		delete(state.PendingArchive, e.OpID)
 		removeNotificationByID(&state, &effects, pending.notifID)
-		closeArchiveConfirm(&state)
+		closeConfirmIntent(&state)
 		state.Focus = focusNotifications
 		state.Status = "archived notification"
 	case ArchiveNotificationFailedEvent:
@@ -741,7 +740,7 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 			break
 		}
 		delete(state.PendingArchive, e.OpID)
-		closeArchiveConfirm(&state)
+		closeConfirmIntent(&state)
 		state.Focus = pending.from
 		state.Status = "archive failed: " + e.Err
 	case CommitDiffLoadedEvent:
@@ -3504,7 +3503,20 @@ func markNotificationRead(state *AppState, effects *[]Effect, n notifRow) {
 	beginReadThrough(state, effects, n.ref, ts, true)
 }
 
-func openArchiveConfirm(state *AppState, effects *[]Effect) {
+func openConfirmIntent(state *AppState, effects *[]Effect, kind confirmActionKind) {
+	if state == nil {
+		return
+	}
+	state.ConfirmIntent = nil
+	switch kind {
+	case confirmActionArchive:
+		openArchiveIntent(state, effects)
+	default:
+		state.Status = "unsupported confirmation action"
+	}
+}
+
+func openArchiveIntent(state *AppState, effects *[]Effect) {
 	targets := archiveTargetNotifications(*state)
 	if len(targets) == 0 {
 		state.Status = "nothing to archive"
@@ -3545,12 +3557,11 @@ func openArchiveConfirm(state *AppState, effects *[]Effect) {
 		notifIDs = append(notifIDs, t.id)
 	}
 	first := filtered[0]
-	state.ArchiveConfirm = &archiveConfirmState{
-		notifID:  first.id,
-		notifIDs: notifIDs,
-		ref:      first.ref,
-		threadID: first.id,
-		from:     state.Focus,
+	state.ConfirmIntent = &confirmIntentState{
+		Kind:           confirmActionArchive,
+		TargetNotifIDs: notifIDs,
+		PrimaryNotifID: first.id,
+		From:           state.Focus,
 	}
 	if blockedReview > 0 || blockedUnknown > 0 {
 		state.Status = "press a again to confirm archive (some blocked)"
@@ -3559,21 +3570,44 @@ func openArchiveConfirm(state *AppState, effects *[]Effect) {
 	state.Status = "press a again to confirm archive"
 }
 
-func closeArchiveConfirm(state *AppState) {
-	state.ArchiveConfirm = nil
-}
-
-func confirmArchiveNotification(state *AppState, effects *[]Effect) {
-	confirm := state.ArchiveConfirm
-	if confirm == nil {
+func closeConfirmIntent(state *AppState) {
+	if state == nil {
 		return
 	}
-	notifIDs := append([]string(nil), confirm.notifIDs...)
-	if len(notifIDs) == 0 && strings.TrimSpace(confirm.notifID) != "" {
-		notifIDs = []string{confirm.notifID}
+	state.ConfirmIntent = nil
+}
+
+func cancelConfirmIntent(state *AppState) {
+	if state == nil || state.ConfirmIntent == nil {
+		return
+	}
+	if state.ConfirmIntent.Kind == confirmActionArchive {
+		state.Status = "archive canceled"
+	}
+	closeConfirmIntent(state)
+}
+
+func confirmActiveIntent(state *AppState, effects *[]Effect) {
+	if state == nil || state.ConfirmIntent == nil {
+		return
+	}
+	intent := *state.ConfirmIntent
+	switch intent.Kind {
+	case confirmActionArchive:
+		confirmArchiveIntent(state, effects, intent)
+	default:
+		state.Status = "unsupported confirmation action"
+		closeConfirmIntent(state)
+	}
+}
+
+func confirmArchiveIntent(state *AppState, effects *[]Effect, intent confirmIntentState) {
+	notifIDs := append([]string(nil), intent.TargetNotifIDs...)
+	if len(notifIDs) == 0 && strings.TrimSpace(intent.PrimaryNotifID) != "" {
+		notifIDs = []string{intent.PrimaryNotifID}
 	}
 	if len(notifIDs) == 0 {
-		closeArchiveConfirm(state)
+		closeConfirmIntent(state)
 		state.Status = "notification no longer available"
 		return
 	}
@@ -3597,13 +3631,13 @@ func confirmArchiveNotification(state *AppState, effects *[]Effect) {
 		if state.PendingArchive == nil {
 			state.PendingArchive = make(map[int64]pendingArchiveOp)
 		}
-		state.PendingArchive[opID] = pendingArchiveOp{notifID: n.id, ref: n.ref, threadID: n.id, from: confirm.from}
+		state.PendingArchive[opID] = pendingArchiveOp{notifID: n.id, ref: n.ref, threadID: n.id, from: intent.From}
 		*effects = append(*effects, ArchiveNotificationEffect{OpID: opID, ThreadID: n.id, UpdatedAt: n.updatedAt})
 		clearNotifMarked(state, n.id)
 		queued++
 	}
-	clearArchiveActedMarks(state, confirm.from)
-	closeArchiveConfirm(state)
+	clearArchiveActedMarks(state, intent.From)
+	closeConfirmIntent(state)
 	if queued == 0 {
 		state.Status = "notification no longer available"
 		return
