@@ -13,12 +13,12 @@
           inherit system;
         };
 
-        gh-pr = pkgs.buildGoModule {
+        gh-pr = pkgs.buildGo124Module {
           pname = "gh-pr";
           version = "0.1.0";
-          src = ./.;
+          src = self;
           subPackages = [ "cmd/gh-pr" ];
-          vendorHash = "sha256-sZUEzBxbButVYi8eFxyrqCQI51a8rUDXpvO1JUxSmjU=";
+          vendorHash = "sha256-Kjdyv//1yoa0Xi3tflu6BRG77lANI1ssL2ZdTaTn2u4=";
         };
       in {
         packages.gh-pr = gh-pr;
