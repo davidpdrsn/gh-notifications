@@ -54,6 +54,18 @@ type styles struct {
 	kindUnkCurrent            lipgloss.Style
 	kindPRDraftCur            lipgloss.Style
 	kindPRWaitCur             lipgloss.Style
+	ciSuccess                 lipgloss.Style
+	ciPending                 lipgloss.Style
+	ciFailed                  lipgloss.Style
+	ciUnknown                 lipgloss.Style
+	ciSuccessSelected         lipgloss.Style
+	ciPendingSelected         lipgloss.Style
+	ciFailedSelected          lipgloss.Style
+	ciUnknownSelected         lipgloss.Style
+	ciSuccessCurrent          lipgloss.Style
+	ciPendingCurrent          lipgloss.Style
+	ciFailedCurrent           lipgloss.Style
+	ciUnknownCurrent          lipgloss.Style
 	error                     lipgloss.Style
 	status                    lipgloss.Style
 	tab                       lipgloss.Style
@@ -121,6 +133,34 @@ func newModel(ctx context.Context, client *ghpr.Client, store *readstate.Store) 
 			kindUnkCurrent: lipgloss.NewStyle().Foreground(t.textMuted).Background(lipgloss.Color("#3A3C4F")),
 			kindPRDraftCur: lipgloss.NewStyle().Foreground(t.textMuted).Background(lipgloss.Color("#3A3C4F")),
 			kindPRWaitCur:  lipgloss.NewStyle().Foreground(t.info).Background(lipgloss.Color("#3A3C4F")),
+			ciSuccess:      lipgloss.NewStyle().Foreground(t.success),
+			ciPending:      lipgloss.NewStyle().Foreground(t.warning),
+			ciFailed:       lipgloss.NewStyle().Foreground(t.danger),
+			ciUnknown:      lipgloss.NewStyle().Foreground(t.textMuted),
+			ciSuccessSelected: lipgloss.NewStyle().
+				Foreground(t.success).
+				Background(markedBg),
+			ciPendingSelected: lipgloss.NewStyle().
+				Foreground(t.warning).
+				Background(markedBg),
+			ciFailedSelected: lipgloss.NewStyle().
+				Foreground(t.danger).
+				Background(markedBg),
+			ciUnknownSelected: lipgloss.NewStyle().
+				Foreground(t.textMuted).
+				Background(markedBg),
+			ciSuccessCurrent: lipgloss.NewStyle().
+				Foreground(t.success).
+				Background(lipgloss.Color("#3A3C4F")),
+			ciPendingCurrent: lipgloss.NewStyle().
+				Foreground(t.warning).
+				Background(lipgloss.Color("#3A3C4F")),
+			ciFailedCurrent: lipgloss.NewStyle().
+				Foreground(t.danger).
+				Background(lipgloss.Color("#3A3C4F")),
+			ciUnknownCurrent: lipgloss.NewStyle().
+				Foreground(t.textMuted).
+				Background(lipgloss.Color("#3A3C4F")),
 			error:          lipgloss.NewStyle().Foreground(t.danger),
 			status:         lipgloss.NewStyle().Foreground(t.textMuted),
 			tab:            lipgloss.NewStyle().Foreground(t.textSecondary),

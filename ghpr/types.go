@@ -92,3 +92,12 @@ type ReviewRequestStatus struct {
 	Draft   bool
 	Author  string
 }
+
+type CIStatus string
+
+const (
+	CIStatusUnknown CIStatus = "unknown"
+	CIStatusPending CIStatus = "pending"
+	CIStatusSuccess CIStatus = "success"
+	CIStatusFailed  CIStatus = "failed"
+)

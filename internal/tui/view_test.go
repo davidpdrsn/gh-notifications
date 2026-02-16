@@ -843,7 +843,7 @@ func TestDetailFocusKeepsThreadCurrentRowVisible(t *testing.T) {
 func TestSelectedUnreadNotificationRowKeepsMarkerAndSelectedTimestampStyling(t *testing.T) {
 	m := newModel(context.Background(), nil, nil)
 	line := " ●  1h owner/repo  Add support for marker styling"
-	out := m.renderNotificationStyledLine(line, 70, 8, 2, "pr", false, false, false, true)
+	out := m.renderNotificationStyledLine(line, 70, 8, 2, 1, "pr", notificationCIUnknown, false, false, false, true)
 
 	if !strings.Contains(out, m.styles.unreadSelected.Render(" ●  ")) {
 		t.Fatalf("expected selected unread marker style, got %q", out)
@@ -864,7 +864,7 @@ func TestSelectedUnreadNotificationRowKeepsMarkerAndSelectedTimestampStyling(t *
 func TestSelectedPartialNotificationRowKeepsMarkerStyling(t *testing.T) {
 	m := newModel(context.Background(), nil, nil)
 	line := " ◐  1h owner/repo  Partial read state"
-	out := m.renderNotificationStyledLine(line, 70, 8, 2, "pr", false, false, false, true)
+	out := m.renderNotificationStyledLine(line, 70, 8, 2, 1, "pr", notificationCIUnknown, false, false, false, true)
 
 	if !strings.Contains(out, m.styles.unreadSelected.Render(" ◐  ")) {
 		t.Fatalf("expected selected partial marker style, got %q", out)
@@ -874,7 +874,7 @@ func TestSelectedPartialNotificationRowKeepsMarkerStyling(t *testing.T) {
 func TestCurrentNotificationRowUsesCurrentBackgroundStyling(t *testing.T) {
 	m := newModel(context.Background(), nil, nil)
 	line := " ●  1h owner/repo  Current row"
-	out := m.renderNotificationStyledLine(line, 70, 8, 2, "pr", false, false, true, false)
+	out := m.renderNotificationStyledLine(line, 70, 8, 2, 1, "pr", notificationCIUnknown, false, false, true, false)
 
 	if !strings.Contains(out, m.styles.unreadCurrent.Render(" ●  ")) {
 		t.Fatalf("expected current unread marker style, got %q", out)
@@ -884,7 +884,7 @@ func TestCurrentNotificationRowUsesCurrentBackgroundStyling(t *testing.T) {
 func TestResolvedPRMarkerUsesMutedStyling(t *testing.T) {
 	m := newModel(context.Background(), nil, nil)
 	line := " +  1h pr owner/repo  merged"
-	out := m.renderNotificationStyledLine(line, 70, 8, 2, "pr", false, false, false, false)
+	out := m.renderNotificationStyledLine(line, 70, 8, 2, 1, "pr", notificationCIUnknown, false, false, false, false)
 
 	if !strings.Contains(out, m.styles.muted.Render(" +  ")) {
 		t.Fatalf("expected resolved marker to use muted style, got %q", out)
@@ -894,7 +894,7 @@ func TestResolvedPRMarkerUsesMutedStyling(t *testing.T) {
 func TestCurrentStyleTakesPrecedenceOverMarkedStyleForNotificationRow(t *testing.T) {
 	m := newModel(context.Background(), nil, nil)
 	line := " ●  1h pr owner/repo  both current and marked"
-	out := m.renderNotificationStyledLine(line, 70, 8, 2, "pr", false, false, true, true)
+	out := m.renderNotificationStyledLine(line, 70, 8, 2, 1, "pr", notificationCIUnknown, false, false, true, true)
 
 	if !strings.Contains(out, m.styles.unreadCurrent.Render(" ●  ")) {
 		t.Fatalf("expected current marker style when row is both current and marked, got %q", out)
@@ -995,6 +995,62 @@ func TestRenderNotificationsShowsDraftPRLabelMuted(t *testing.T) {
 	out := m.renderNotifications(leftW, paneInnerHeight(m.state))
 	if !strings.Contains(out, m.styles.kindPRDraftCur.Render("draft")) {
 		t.Fatalf("expected draft pr kind label to use muted style")
+	}
+}
+
+func TestRenderNotificationsShowsCIIconBetweenKindAndAuthor(t *testing.T) {
+	m := newModel(context.Background(), nil, nil)
+	m.state.Width = 110
+	m.state.Height = 20
+	m.state.Notifications = []notifRow{{
+		id:        "n1",
+		repo:      "owner/repo",
+		kind:      "pr",
+		author:    "alice",
+		ref:       "owner/repo#1",
+		title:     "ci check",
+		updatedAt: time.Now().UTC(),
+	}}
+	m.state.rebuildNotifIndex()
+	m.state.SelectedNotif = "n1"
+	m.state.NotifSelected = 0
+	m.state.ReviewReqLoadedByRef["owner/repo#1"] = true
+	m.state.CIByRef["owner/repo#1"] = notificationCISuccess
+	m.state.CILoadedByRef["owner/repo#1"] = true
+
+	leftW, _, _ := paneWidths(panesTotalWidth(m.state.Width, m.state.Focus, m.state.currentPaneMode()), m.state.Focus, m.state.currentPaneMode())
+	out := m.renderNotifications(leftW, paneInnerHeight(m.state))
+	ansi := regexp.MustCompile(`\x1b\[[0-9;]*m`)
+	plain := ansi.ReplaceAllString(out, "")
+	if !strings.Contains(plain, "pr ✓  alice") {
+		t.Fatalf("expected CI icon between kind and author, got %q", plain)
+	}
+}
+
+func TestRenderNotificationsFallsBackToUnknownCIIcon(t *testing.T) {
+	m := newModel(context.Background(), nil, nil)
+	m.state.Width = 110
+	m.state.Height = 20
+	m.state.Notifications = []notifRow{{
+		id:        "n1",
+		repo:      "owner/repo",
+		kind:      "pr",
+		author:    "alice",
+		ref:       "owner/repo#1",
+		title:     "ci unknown",
+		updatedAt: time.Now().UTC(),
+	}}
+	m.state.rebuildNotifIndex()
+	m.state.SelectedNotif = "n1"
+	m.state.NotifSelected = 0
+	m.state.ReviewReqLoadedByRef["owner/repo#1"] = true
+
+	leftW, _, _ := paneWidths(panesTotalWidth(m.state.Width, m.state.Focus, m.state.currentPaneMode()), m.state.Focus, m.state.currentPaneMode())
+	out := m.renderNotifications(leftW, paneInnerHeight(m.state))
+	ansi := regexp.MustCompile(`\x1b\[[0-9;]*m`)
+	plain := ansi.ReplaceAllString(out, "")
+	if !strings.Contains(plain, "pr -  alice") {
+		t.Fatalf("expected unknown CI icon, got %q", plain)
 	}
 }
 

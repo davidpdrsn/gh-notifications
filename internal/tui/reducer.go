@@ -102,6 +102,18 @@ type ReviewReqStateLoadFailedEvent struct {
 	Err  string
 }
 
+type CIStateLoadedEvent struct {
+	Refs        []string
+	SuccessRefs []string
+	PendingRefs []string
+	FailedRefs  []string
+}
+
+type CIStateLoadFailedEvent struct {
+	Refs []string
+	Err  string
+}
+
 type ArchiveNotificationSucceededEvent struct {
 	OpID int64
 }
@@ -191,6 +203,8 @@ func (ViewerLoadedEvent) isEvent()                     {}
 func (ViewerLoadFailedEvent) isEvent()                 {}
 func (ReviewReqStateLoadedEvent) isEvent()             {}
 func (ReviewReqStateLoadFailedEvent) isEvent()         {}
+func (CIStateLoadedEvent) isEvent()                    {}
+func (CIStateLoadFailedEvent) isEvent()                {}
 func (ArchiveNotificationSucceededEvent) isEvent()     {}
 func (ArchiveNotificationFailedEvent) isEvent()        {}
 func (UnsubscribeNotificationSucceededEvent) isEvent() {}
@@ -250,6 +264,8 @@ type LoadViewerEffect struct{}
 
 type LoadReviewReqStateEffect struct{ Refs []string }
 
+type LoadCIStateEffect struct{ Refs []string }
+
 type ArchiveNotificationEffect struct {
 	OpID      int64
 	ThreadID  string
@@ -279,6 +295,7 @@ func (LoadParentReadStateEffect) isEffect()     {}
 func (PersistParentReadStateEffect) isEffect()  {}
 func (LoadViewerEffect) isEffect()              {}
 func (LoadReviewReqStateEffect) isEffect()      {}
+func (LoadCIStateEffect) isEffect()             {}
 func (ArchiveNotificationEffect) isEffect()     {}
 func (UnsubscribeNotificationEffect) isEffect() {}
 func (OpenURLEffect) isEffect()                 {}
@@ -439,6 +456,7 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 			if e.Item.Target.Kind == "pr" {
 				invalidateNotifMarkerCacheForRef(&state, e.Item.Target.Ref)
 				enqueueReviewReqLoadForRefForced(&state, &effects, e.Item.Target.Ref)
+				enqueueCILoadForRef(&state, &effects, e.Item.Target.Ref)
 			}
 			if state.RefreshInFlight && state.RefreshStage == "notifications" {
 				insertRefreshNotification(&state, e.Item)
@@ -456,6 +474,7 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 				enqueueAllTimelineLoadsByPriority(&state)
 				queueParentReadStateLoadsForRefs(&state, &effects, visibleRefs(state.visibleNotifications()))
 				queueReviewReqLoadsForNotifications(&state, &effects)
+				queueCILoadsForNotifications(&state, &effects, true)
 				finishRefresh(&state, &effects)
 				break
 			}
@@ -464,6 +483,7 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 			state.LastRefreshAt = time.Now()
 			enqueueAllTimelineLoadsByPriority(&state)
 			queueReviewReqLoadsForNotifications(&state, &effects)
+			queueCILoadsForNotifications(&state, &effects, true)
 		}
 	case NotificationsErrEvent:
 		if e.Generation == state.NotifGen {
@@ -749,6 +769,58 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 	case ReviewReqStateLoadFailedEvent:
 		for _, ref := range e.Refs {
 			delete(state.ReviewReqLoadInFlightByRef, strings.TrimSpace(ref))
+		}
+	case CIStateLoadedEvent:
+		success := make(map[string]bool, len(e.SuccessRefs))
+		for _, ref := range e.SuccessRefs {
+			ref = strings.TrimSpace(ref)
+			if ref == "" {
+				continue
+			}
+			success[ref] = true
+		}
+		pending := make(map[string]bool, len(e.PendingRefs))
+		for _, ref := range e.PendingRefs {
+			ref = strings.TrimSpace(ref)
+			if ref == "" {
+				continue
+			}
+			pending[ref] = true
+		}
+		failed := make(map[string]bool, len(e.FailedRefs))
+		for _, ref := range e.FailedRefs {
+			ref = strings.TrimSpace(ref)
+			if ref == "" {
+				continue
+			}
+			failed[ref] = true
+		}
+		for _, ref := range e.Refs {
+			ref = strings.TrimSpace(ref)
+			if ref == "" {
+				continue
+			}
+			delete(state.CILoadInFlightByRef, ref)
+			state.CILoadedByRef[ref] = true
+			status := notificationCIUnknown
+			if failed[ref] {
+				status = notificationCIFailed
+			} else if pending[ref] {
+				status = notificationCIPending
+			} else if success[ref] {
+				status = notificationCISuccess
+			}
+			state.CIByRef[ref] = status
+		}
+	case CIStateLoadFailedEvent:
+		for _, ref := range e.Refs {
+			ref = strings.TrimSpace(ref)
+			if ref == "" {
+				continue
+			}
+			delete(state.CILoadInFlightByRef, ref)
+			state.CILoadedByRef[ref] = true
+			state.CIByRef[ref] = notificationCIUnknown
 		}
 	case ArchiveNotificationSucceededEvent:
 		pending, ok := state.PendingArchive[e.OpID]
@@ -1823,12 +1895,16 @@ func notificationRowWrappedHeight(state AppState, visible []notifRow, i int) int
 	}
 	timeColWidth := notificationTimeColumnWidth(visible)
 	kindColWidth := notificationKindColumnWidthForState(state, visible)
+	ciColWidth := notificationCIColumnWidth(visible)
+	authorColWidth := notificationAuthorColumnWidth(visible)
 	repoColWidth := notificationRepoColumnWidth(visible)
-	prefix := padToDisplayWidth(timeAgo(visible[i].updatedAt), timeColWidth) + " "
+	prefix := state.notificationUnreadMarker(visible[i]) + padToDisplayWidth(timeAgo(visible[i].updatedAt), timeColWidth) + " "
 	kind := padToDisplayWidth(notificationKindLabelForNotification(state, visible[i]), kindColWidth)
+	ci := padToDisplayWidth(notificationCIIcon(state.notificationCI(visible[i])), ciColWidth)
+	author := padToDisplayWidth(clampDisplayWidth(oneLine(visible[i].author), authorColWidth), authorColWidth)
 	repo := padToDisplayWidth(clampDisplayWidth(oneLine(visible[i].repo), repoColWidth), repoColWidth)
-	label := prefix + kind + " " + repo + "  " + oneLine(visible[i].title)
-	titleIndent := strings.Repeat(" ", lipgloss.Width(prefix)+kindColWidth+1+repoColWidth+2)
+	label := prefix + kind + " " + ci + "  " + author + " " + repo + "  " + oneLine(visible[i].title)
+	titleIndent := strings.Repeat(" ", lipgloss.Width(prefix)+kindColWidth+1+ciColWidth+2+authorColWidth+1+repoColWidth+2)
 	h := len(wrapDisplayWidth(label, avail, titleIndent))
 	if h < 1 {
 		return 1
@@ -2378,6 +2454,7 @@ func ensureNotificationSelectionVisible(state *AppState) {
 	}
 	timeColWidth := notificationTimeColumnWidth(visible)
 	kindColWidth := notificationKindColumnWidthForState(*state, visible)
+	ciColWidth := notificationCIColumnWidth(visible)
 	authorColWidth := notificationAuthorColumnWidth(visible)
 	repoColWidth := notificationRepoColumnWidth(visible)
 	state.NotifScroll = clampWrappedScroll(state.NotifScroll, state.NotifSelected, len(visible), viewport, func(i int) int {
@@ -2386,10 +2463,11 @@ func ensureNotificationSelectionVisible(state *AppState) {
 		}
 		prefix := padToDisplayWidth(timeAgo(visible[i].updatedAt), timeColWidth) + " "
 		kind := padToDisplayWidth(notificationKindLabelForNotification(*state, visible[i]), kindColWidth)
+		ci := padToDisplayWidth(notificationCIIcon(state.notificationCI(visible[i])), ciColWidth)
 		author := padToDisplayWidth(clampDisplayWidth(oneLine(visible[i].author), authorColWidth), authorColWidth)
 		repo := padToDisplayWidth(clampDisplayWidth(oneLine(visible[i].repo), repoColWidth), repoColWidth)
-		label := prefix + kind + " " + author + " " + repo + "  " + oneLine(visible[i].title)
-		titleIndent := strings.Repeat(" ", lipgloss.Width(prefix)+kindColWidth+1+authorColWidth+1+repoColWidth+2)
+		label := prefix + kind + " " + ci + "  " + author + " " + repo + "  " + oneLine(visible[i].title)
+		titleIndent := strings.Repeat(" ", lipgloss.Width(prefix)+kindColWidth+1+ciColWidth+2+authorColWidth+1+repoColWidth+2)
 		return len(wrapDisplayWidth(label, avail, titleIndent))
 	})
 }
@@ -2974,6 +3052,54 @@ func queueReviewReqLoadsForNotifications(state *AppState, effects *[]Effect) {
 		refs = append(refs, n.ref)
 	}
 	queueReviewReqStateLoadsForRefs(state, effects, refs)
+}
+
+func queueCILoadsForNotifications(state *AppState, effects *[]Effect, force bool) {
+	if state == nil {
+		return
+	}
+	refs := make([]string, 0, len(state.Notifications))
+	for _, n := range state.Notifications {
+		if strings.TrimSpace(n.kind) != "pr" {
+			continue
+		}
+		refs = append(refs, n.ref)
+	}
+	queueCIStateLoadsForRefs(state, effects, refs, force)
+}
+
+func enqueueCILoadForRef(state *AppState, effects *[]Effect, ref string) {
+	queueCIStateLoadsForRefs(state, effects, []string{ref}, false)
+}
+
+func queueCIStateLoadsForRefs(state *AppState, effects *[]Effect, refs []string, force bool) {
+	if state == nil {
+		return
+	}
+	if state.CILoadedByRef == nil {
+		state.CILoadedByRef = make(map[string]bool)
+	}
+	if state.CILoadInFlightByRef == nil {
+		state.CILoadInFlightByRef = make(map[string]bool)
+	}
+	toLoad := make([]string, 0, len(refs))
+	seen := make(map[string]bool, len(refs))
+	for _, ref := range refs {
+		ref = strings.TrimSpace(ref)
+		if ref == "" || seen[ref] || state.CILoadInFlightByRef[ref] {
+			continue
+		}
+		if !force && state.CILoadedByRef[ref] {
+			continue
+		}
+		seen[ref] = true
+		state.CILoadInFlightByRef[ref] = true
+		toLoad = append(toLoad, ref)
+	}
+	if len(toLoad) == 0 {
+		return
+	}
+	*effects = append(*effects, LoadCIStateEffect{Refs: toLoad})
 }
 
 func enqueueReviewReqLoadForRef(state *AppState, effects *[]Effect, ref string) {

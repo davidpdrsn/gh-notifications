@@ -1,7 +1,11 @@
 package ghpr
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"os/exec"
+	"strconv"
 	"strings"
 
 	"gh-pr/internal/github"
@@ -188,6 +192,148 @@ func (c *Client) ReviewRequestStatusForViewer(ctx context.Context, ref string, v
 		}
 	}
 	return ReviewRequestStatus{Draft: pr.Draft, Author: author}, nil
+}
+
+func (c *Client) CIStatusForPR(ctx context.Context, ref string) CIStatus {
+	parsed, err := ParseTimelineRef(ref)
+	if err != nil {
+		return CIStatusUnknown
+	}
+
+	rollup, err := runGhPRViewStatusCheckRollup(ctx, parsed.Owner+"/"+parsed.Repo, parsed.Number)
+	if err != nil {
+		return CIStatusUnknown
+	}
+
+	status, ok := parseStatusCheckRollup(rollup)
+	if !ok {
+		return CIStatusUnknown
+	}
+	return status
+}
+
+var runGhPRViewStatusCheckRollup = func(ctx context.Context, repo string, number int) ([]byte, error) {
+	cmd := exec.CommandContext(
+		ctx,
+		"gh",
+		"pr",
+		"view",
+		strconv.Itoa(number),
+		"-R",
+		repo,
+		"--json",
+		"statusCheckRollup",
+	)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func parseStatusCheckRollup(raw []byte) (CIStatus, bool) {
+	var payload struct {
+		StatusCheckRollup []json.RawMessage `json:"statusCheckRollup"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return CIStatusUnknown, false
+	}
+	if len(payload.StatusCheckRollup) == 0 {
+		return CIStatusUnknown, true
+	}
+
+	hasPending := false
+	hasSuccess := false
+
+	for _, itemRaw := range payload.StatusCheckRollup {
+		var item struct {
+			Conclusion string `json:"conclusion"`
+			Status     string `json:"status"`
+			State      string `json:"state"`
+		}
+		if err := json.Unmarshal(itemRaw, &item); err != nil {
+			continue
+		}
+
+		conclusion := strings.ToUpper(strings.TrimSpace(item.Conclusion))
+		status := strings.ToUpper(strings.TrimSpace(item.Status))
+		state := strings.ToUpper(strings.TrimSpace(item.State))
+
+		if ciFailureConclusion(conclusion) || ciFailureState(state) {
+			return CIStatusFailed, true
+		}
+		if ciPendingStatus(status) || ciPendingState(state) {
+			hasPending = true
+			continue
+		}
+		if ciSuccessConclusion(conclusion) || ciSuccessState(state) {
+			hasSuccess = true
+		}
+	}
+
+	if hasPending {
+		return CIStatusPending, true
+	}
+	if hasSuccess {
+		return CIStatusSuccess, true
+	}
+	return CIStatusUnknown, true
+}
+
+func ciFailureConclusion(conclusion string) bool {
+	switch conclusion {
+	case "FAILURE", "TIMED_OUT", "CANCELLED", "STARTUP_FAILURE", "ACTION_REQUIRED", "STALE":
+		return true
+	default:
+		return false
+	}
+}
+
+func ciFailureState(state string) bool {
+	switch state {
+	case "ERROR", "FAILURE", "FAILED":
+		return true
+	default:
+		return false
+	}
+}
+
+func ciPendingStatus(status string) bool {
+	switch status {
+	case "QUEUED", "IN_PROGRESS", "PENDING", "REQUESTED", "WAITING", "EXPECTED":
+		return true
+	default:
+		return false
+	}
+}
+
+func ciPendingState(state string) bool {
+	switch state {
+	case "PENDING", "EXPECTED":
+		return true
+	default:
+		return false
+	}
+}
+
+func ciSuccessConclusion(conclusion string) bool {
+	switch conclusion {
+	case "SUCCESS", "NEUTRAL", "SKIPPED":
+		return true
+	default:
+		return false
+	}
+}
+
+func ciSuccessState(state string) bool {
+	switch state {
+	case "SUCCESS":
+		return true
+	default:
+		return false
+	}
 }
 
 func (c *Client) streamPRTimeline(ctx context.Context, owner, repo string, number int, emit func(timelineapi.Event) error, onWarning func(string)) error {

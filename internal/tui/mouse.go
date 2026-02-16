@@ -218,6 +218,8 @@ func notificationRowAtY(state AppState, y, width int) int {
 	}
 	timeColWidth := notificationTimeColumnWidth(visible)
 	kindColWidth := notificationKindColumnWidthForState(state, visible)
+	ciColWidth := notificationCIColumnWidth(visible)
+	authorColWidth := notificationAuthorColumnWidth(visible)
 	repoColWidth := notificationRepoColumnWidth(visible)
 	line := y - 1
 
@@ -225,9 +227,11 @@ func notificationRowAtY(state AppState, y, width int) int {
 		n := visible[i]
 		prefix := state.notificationUnreadMarker(n) + padToDisplayWidth(timeAgo(n.updatedAt), timeColWidth) + " "
 		kind := padToDisplayWidth(notificationKindLabelForNotification(state, n), kindColWidth)
+		ci := padToDisplayWidth(notificationCIIcon(state.notificationCI(n)), ciColWidth)
+		author := padToDisplayWidth(clampDisplayWidth(oneLine(n.author), authorColWidth), authorColWidth)
 		repo := padToDisplayWidth(clampDisplayWidth(oneLine(n.repo), repoColWidth), repoColWidth)
-		label := prefix + kind + " " + repo + "  " + oneLine(n.title)
-		titleIndent := strings.Repeat(" ", lipgloss.Width(prefix)+kindColWidth+1+repoColWidth+2)
+		label := prefix + kind + " " + ci + "  " + author + " " + repo + "  " + oneLine(n.title)
+		titleIndent := strings.Repeat(" ", lipgloss.Width(prefix)+kindColWidth+1+ciColWidth+2+authorColWidth+1+repoColWidth+2)
 		wrapped := wrapDisplayWidth(label, avail, titleIndent)
 		h := len(wrapped)
 		if h < 1 {

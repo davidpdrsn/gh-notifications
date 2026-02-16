@@ -292,6 +292,7 @@ func (m *model) renderNotifications(width, height int) string {
 	}
 	timeColWidth := notificationTimeColumnWidth(visible)
 	kindColWidth := notificationKindColumnWidthForState(m.state, visible)
+	ciColWidth := notificationCIColumnWidth(visible)
 	authorColWidth := notificationAuthorColumnWidth(visible)
 	repoColWidth := notificationRepoColumnWidth(visible)
 	confirmTargets := confirmIntentTargetSet(m.state.ConfirmIntent)
@@ -326,19 +327,21 @@ func (m *model) renderNotifications(width, height int) string {
 		marker := m.state.notificationUnreadMarker(n)
 		waitingOnMe := strings.TrimSpace(n.kind) == "pr" && m.state.ReviewReqByRef[n.ref]
 		draftPR := strings.TrimSpace(n.kind) == "pr" && m.state.ReviewReqDraftByRef[n.ref]
+		ciState := m.state.notificationCI(n)
+		ciIcon := padToDisplayWidth(notificationCIIcon(ciState), ciColWidth)
 		prefix := marker + padToDisplayWidth(timeAgo(n.updatedAt), timeColWidth) + " "
 		kind := padToDisplayWidth(notificationKindLabelForNotification(m.state, n), kindColWidth)
 		author := padToDisplayWidth(clampDisplayWidth(oneLine(n.author), authorColWidth), authorColWidth)
 		repo := padToDisplayWidth(clampDisplayWidth(oneLine(n.repo), repoColWidth), repoColWidth)
 		label := prefix + kind + " "
+		label += ciIcon + "  "
 		label += author + " "
 		label += repo + "  " + oneLine(n.title)
 		avail := paneContentWidthWithRelativeNumbers(width, height)
 		if avail < 1 {
 			avail = 1
 		}
-		indentWidth := lipgloss.Width(prefix) + kindColWidth + 1 + repoColWidth + 2
-		indentWidth += authorColWidth + 1
+		indentWidth := lipgloss.Width(prefix) + kindColWidth + 1 + ciColWidth + 2 + authorColWidth + 1 + repoColWidth + 2
 		minContinuationWidth := 12
 		maxIndent := avail - minContinuationWidth
 		if maxIndent < 0 {
@@ -357,11 +360,11 @@ func (m *model) renderNotifications(width, height int) string {
 		rendered := make([]string, 0, len(wrapped))
 		if current || marked {
 			for _, seg := range wrapped {
-				rendered = append(rendered, m.renderNotificationStyledLine(seg, avail, timeColWidth+5, kindColWidth, n.kind, waitingOnMe, draftPR, current, marked))
+				rendered = append(rendered, m.renderNotificationStyledLine(seg, avail, timeColWidth+5, kindColWidth, ciColWidth, n.kind, ciState, waitingOnMe, draftPR, current, marked))
 			}
 		} else {
 			for _, seg := range wrapped {
-				rendered = append(rendered, m.renderNotificationStyledLine(seg, avail, timeColWidth+5, kindColWidth, n.kind, waitingOnMe, draftPR, false, false))
+				rendered = append(rendered, m.renderNotificationStyledLine(seg, avail, timeColWidth+5, kindColWidth, ciColWidth, n.kind, ciState, waitingOnMe, draftPR, false, false))
 			}
 		}
 		if confirmTargets[n.id] && len(rendered) > 0 {
@@ -494,6 +497,23 @@ func notificationAuthorColumnWidth(rows []notifRow) int {
 	return width
 }
 
+func notificationCIColumnWidth(_ []notifRow) int {
+	return 1
+}
+
+func notificationCIIcon(state notificationCIState) string {
+	switch state {
+	case notificationCISuccess:
+		return "✓"
+	case notificationCIPending:
+		return "…"
+	case notificationCIFailed:
+		return "✗"
+	default:
+		return "-"
+	}
+}
+
 func notificationKindLabel(kind string) string {
 	switch strings.TrimSpace(strings.ToLower(kind)) {
 	case "pull_request", "pull-request", "pr":
@@ -557,7 +577,7 @@ func renderNotificationTimestamp(line string, width int, style lipgloss.Style) s
 	return style.Render(prefix) + rest
 }
 
-func (m *model) renderNotificationStyledLine(line string, width int, timeWidth int, kindWidth int, kind string, waitingOnMe bool, draftPR bool, current bool, marked bool) string {
+func (m *model) renderNotificationStyledLine(line string, width int, timeWidth int, kindWidth int, ciWidth int, kind string, ciState notificationCIState, waitingOnMe bool, draftPR bool, current bool, marked bool) string {
 	if width < 1 {
 		width = 1
 	}
@@ -574,16 +594,19 @@ func (m *model) renderNotificationStyledLine(line string, width int, timeWidth i
 			return content
 		}
 		kindCol, tail := splitAtExactDisplayWidth(content, kindWidth)
-		sep, body := splitAtExactDisplayWidth(tail, 1)
+		sep, tailAfterKind := splitAtExactDisplayWidth(tail, 1)
+		ciCol, tailAfterCI := splitAtExactDisplayWidth(tailAfterKind, ciWidth)
+		ciSep, body := splitAtExactDisplayWidth(tailAfterCI, 1)
 		kindStyle := m.kindStyle(kindCol, waitingOnMe, draftPR, current, marked)
 		kindRendered := kindStyle.Render(kindCol)
+		ciRendered := m.ciStyle(ciState, current, marked).Render(ciCol)
 		if current {
-			return kindRendered + m.styles.current.Render(sep+body)
+			return kindRendered + m.styles.current.Render(sep) + ciRendered + m.styles.current.Render(ciSep+body)
 		}
 		if marked {
-			return kindRendered + m.styles.selected.Render(sep+body)
+			return kindRendered + m.styles.selected.Render(sep) + ciRendered + m.styles.selected.Render(ciSep+body)
 		}
-		return kindRendered + sep + body
+		return kindRendered + sep + ciRendered + ciSep + body
 	}
 
 	if current {
@@ -675,6 +698,43 @@ func (m *model) kindStyle(kind string, waitingOnMe bool, draftPR bool, current b
 		return m.styles.kindIS
 	default:
 		return m.styles.kindUnknown
+	}
+}
+
+func (m *model) ciStyle(state notificationCIState, current bool, marked bool) lipgloss.Style {
+	if current {
+		switch state {
+		case notificationCISuccess:
+			return m.styles.ciSuccessCurrent
+		case notificationCIPending:
+			return m.styles.ciPendingCurrent
+		case notificationCIFailed:
+			return m.styles.ciFailedCurrent
+		default:
+			return m.styles.ciUnknownCurrent
+		}
+	}
+	if marked {
+		switch state {
+		case notificationCISuccess:
+			return m.styles.ciSuccessSelected
+		case notificationCIPending:
+			return m.styles.ciPendingSelected
+		case notificationCIFailed:
+			return m.styles.ciFailedSelected
+		default:
+			return m.styles.ciUnknownSelected
+		}
+	}
+	switch state {
+	case notificationCISuccess:
+		return m.styles.ciSuccess
+	case notificationCIPending:
+		return m.styles.ciPending
+	case notificationCIFailed:
+		return m.styles.ciFailed
+	default:
+		return m.styles.ciUnknown
 	}
 }
 

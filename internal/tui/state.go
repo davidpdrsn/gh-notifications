@@ -37,6 +37,15 @@ type notifRow struct {
 	ref       string
 }
 
+type notificationCIState string
+
+const (
+	notificationCIUnknown notificationCIState = "unknown"
+	notificationCIPending notificationCIState = "pending"
+	notificationCISuccess notificationCIState = "success"
+	notificationCIFailed  notificationCIState = "failed"
+)
+
 type timelineRow struct {
 	id     string
 	sortAt time.Time
@@ -183,6 +192,9 @@ type AppState struct {
 	AuthorByRef                 map[string]string
 	ReviewReqLoadedByRef        map[string]bool
 	ReviewReqLoadInFlightByRef  map[string]bool
+	CIByRef                     map[string]notificationCIState
+	CILoadedByRef               map[string]bool
+	CILoadInFlightByRef         map[string]bool
 }
 
 type pendingReadOp struct {
@@ -254,6 +266,9 @@ func NewState() AppState {
 		AuthorByRef:                 make(map[string]string),
 		ReviewReqLoadedByRef:        make(map[string]bool),
 		ReviewReqLoadInFlightByRef:  make(map[string]bool),
+		CIByRef:                     make(map[string]notificationCIState),
+		CILoadedByRef:               make(map[string]bool),
+		CILoadInFlightByRef:         make(map[string]bool),
 	}
 }
 
@@ -404,6 +419,17 @@ func (s *AppState) notificationRowReady(n notifRow) bool {
 		return true
 	}
 	return s.ReviewReqLoadedByRef[strings.TrimSpace(n.ref)]
+}
+
+func (s AppState) notificationCI(n notifRow) notificationCIState {
+	if strings.TrimSpace(strings.ToLower(n.kind)) != "pr" {
+		return notificationCIUnknown
+	}
+	state, ok := s.CIByRef[strings.TrimSpace(n.ref)]
+	if !ok {
+		return notificationCIUnknown
+	}
+	return state
 }
 
 func indexOfNotificationByID(rows []notifRow, id string) int {

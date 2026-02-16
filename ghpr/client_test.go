@@ -84,3 +84,63 @@ func TestReviewRequestStatusForViewerMergedPR(t *testing.T) {
 		t.Fatalf("expected merged status only, got %+v", status)
 	}
 }
+
+func TestParseStatusCheckRollupFailedWins(t *testing.T) {
+	status, ok := parseStatusCheckRollup([]byte(`{
+		"statusCheckRollup": [
+			{"status":"COMPLETED","conclusion":"SUCCESS"},
+			{"status":"COMPLETED","conclusion":"FAILURE"}
+		]
+	}`))
+	if !ok {
+		t.Fatalf("expected parser to succeed")
+	}
+	if status != CIStatusFailed {
+		t.Fatalf("expected failed status, got %q", status)
+	}
+}
+
+func TestParseStatusCheckRollupPending(t *testing.T) {
+	status, ok := parseStatusCheckRollup([]byte(`{
+		"statusCheckRollup": [
+			{"status":"IN_PROGRESS"}
+		]
+	}`))
+	if !ok {
+		t.Fatalf("expected parser to succeed")
+	}
+	if status != CIStatusPending {
+		t.Fatalf("expected pending status, got %q", status)
+	}
+}
+
+func TestParseStatusCheckRollupSuccess(t *testing.T) {
+	status, ok := parseStatusCheckRollup([]byte(`{
+		"statusCheckRollup": [
+			{"status":"COMPLETED","conclusion":"SUCCESS"},
+			{"state":"SUCCESS"}
+		]
+	}`))
+	if !ok {
+		t.Fatalf("expected parser to succeed")
+	}
+	if status != CIStatusSuccess {
+		t.Fatalf("expected success status, got %q", status)
+	}
+}
+
+func TestCIStatusForPRFailsOpenWhenGhFails(t *testing.T) {
+	original := runGhPRViewStatusCheckRollup
+	t.Cleanup(func() {
+		runGhPRViewStatusCheckRollup = original
+	})
+	runGhPRViewStatusCheckRollup = func(ctx context.Context, repo string, number int) ([]byte, error) {
+		return nil, context.DeadlineExceeded
+	}
+
+	client := NewClientWithBaseURL("", "https://api.github.example")
+	status := client.CIStatusForPR(context.Background(), "o/r#42")
+	if status != CIStatusUnknown {
+		t.Fatalf("expected unknown status on gh failure, got %q", status)
+	}
+}

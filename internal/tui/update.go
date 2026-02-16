@@ -108,6 +108,18 @@ type reviewReqStateLoadErrMsg struct {
 	err  error
 }
 
+type ciStateLoadedMsg struct {
+	refs        []string
+	successRefs []string
+	pendingRefs []string
+	failedRefs  []string
+}
+
+type ciStateLoadErrMsg struct {
+	refs []string
+	err  error
+}
+
 type archiveNotificationSucceededMsg struct {
 	opID int64
 }
@@ -243,6 +255,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case reviewReqStateLoadErrMsg:
 		asyncMsg = true
 		events = append(events, ReviewReqStateLoadFailedEvent{Refs: t.refs, Err: t.err.Error()})
+	case ciStateLoadedMsg:
+		asyncMsg = true
+		events = append(events, CIStateLoadedEvent{Refs: t.refs, SuccessRefs: t.successRefs, PendingRefs: t.pendingRefs, FailedRefs: t.failedRefs})
+	case ciStateLoadErrMsg:
+		asyncMsg = true
+		events = append(events, CIStateLoadFailedEvent{Refs: t.refs, Err: t.err.Error()})
 	case archiveNotificationSucceededMsg:
 		asyncMsg = true
 		events = append(events, ArchiveNotificationSucceededEvent{OpID: t.opID})
@@ -361,6 +379,8 @@ func (m *model) applyEffects(effects []Effect) {
 			m.startViewerLoader()
 		case LoadReviewReqStateEffect:
 			m.startReviewReqStateLoader(e.Refs)
+		case LoadCIStateEffect:
+			m.startCIStateLoader(e.Refs)
 		case ArchiveNotificationEffect:
 			m.startArchiveNotification(e.OpID, e.ThreadID, e.UpdatedAt)
 		case UnsubscribeNotificationEffect:
@@ -539,6 +559,34 @@ func (m *model) startReviewReqStateLoader(refs []string) {
 			}
 		}
 		m.msgCh <- reviewReqStateLoadedMsg{refs: refs, pendingRefs: pending, mergedRefs: merged, closedRefs: closed, draftRefs: draft, authorByRef: authorByRef}
+	}()
+}
+
+func (m *model) startCIStateLoader(refs []string) {
+	go func() {
+		if m.client == nil {
+			m.msgCh <- ciStateLoadErrMsg{refs: refs, err: errors.New("client unavailable")}
+			return
+		}
+		success := make([]string, 0, len(refs))
+		pending := make([]string, 0, len(refs))
+		failed := make([]string, 0, len(refs))
+		for _, ref := range refs {
+			ref = strings.TrimSpace(ref)
+			if ref == "" {
+				continue
+			}
+			status := m.client.CIStatusForPR(m.ctx, ref)
+			switch status {
+			case ghpr.CIStatusSuccess:
+				success = append(success, ref)
+			case ghpr.CIStatusPending:
+				pending = append(pending, ref)
+			case ghpr.CIStatusFailed:
+				failed = append(failed, ref)
+			}
+		}
+		m.msgCh <- ciStateLoadedMsg{refs: refs, successRefs: success, pendingRefs: pending, failedRefs: failed}
 	}()
 }
 

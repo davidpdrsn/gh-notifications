@@ -401,17 +401,21 @@ func notificationSelectionVisibleWithWrap(state AppState) bool {
 	}
 	timeColWidth := notificationTimeColumnWidth(state.Notifications)
 	kindColWidth := notificationKindColumnWidthForState(state, state.Notifications)
+	ciColWidth := notificationCIColumnWidth(state.Notifications)
+	authorColWidth := notificationAuthorColumnWidth(state.Notifications)
 	repoColWidth := notificationRepoColumnWidth(state.Notifications)
 
 	used := 0
 	selectedOffset := -1
 	selectedHeight := 1
 	for i := state.NotifScroll; i < len(state.Notifications); i++ {
-		prefix := padToDisplayWidth(timeAgo(state.Notifications[i].updatedAt), timeColWidth) + " "
+		prefix := state.notificationUnreadMarker(state.Notifications[i]) + padToDisplayWidth(timeAgo(state.Notifications[i].updatedAt), timeColWidth) + " "
 		kind := padToDisplayWidth(notificationKindLabelForNotification(state, state.Notifications[i]), kindColWidth)
+		ci := padToDisplayWidth(notificationCIIcon(state.notificationCI(state.Notifications[i])), ciColWidth)
+		author := padToDisplayWidth(clampDisplayWidth(oneLine(state.Notifications[i].author), authorColWidth), authorColWidth)
 		repo := padToDisplayWidth(clampDisplayWidth(oneLine(state.Notifications[i].repo), repoColWidth), repoColWidth)
-		label := prefix + kind + " " + repo + "  " + oneLine(state.Notifications[i].title)
-		h := len(wrapDisplayWidth(label, avail, strings.Repeat(" ", lipgloss.Width(prefix)+kindColWidth+1+repoColWidth+2)))
+		label := prefix + kind + " " + ci + "  " + author + " " + repo + "  " + oneLine(state.Notifications[i].title)
+		h := len(wrapDisplayWidth(label, avail, strings.Repeat(" ", lipgloss.Width(prefix)+kindColWidth+1+ciColWidth+2+authorColWidth+1+repoColWidth+2)))
 		if h < 1 {
 			h = 1
 		}
