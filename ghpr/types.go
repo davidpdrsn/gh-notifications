@@ -80,6 +80,11 @@ type NotificationEvent struct {
 	Target     NotificationTarget     `json:"target"`
 }
 
+type NotificationThreadSubscription struct {
+	Subscribed bool `json:"subscribed"`
+	Ignored    bool `json:"ignored"`
+}
+
 type ReviewRequestStatus struct {
 	Pending bool
 	Merged  bool

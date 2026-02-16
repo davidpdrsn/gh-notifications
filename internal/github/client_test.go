@@ -68,6 +68,39 @@ func TestUnsubscribeNotificationThreadUsesDeleteSubscriptionEndpoint(t *testing.
 	}
 }
 
+func TestFetchNotificationThreadSubscriptionUsesGetEndpoint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Fatalf("expected GET method, got %q", r.Method)
+		}
+		if r.URL.Path != "/notifications/threads/42/subscription" {
+			t.Fatalf("expected thread subscription path, got %q", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"subscribed":false,"ignored":true}`))
+	}))
+	defer server.Close()
+
+	client := NewClient("", server.URL)
+	out, err := client.FetchNotificationThreadSubscription(context.Background(), "42")
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if out.Subscribed {
+		t.Fatalf("expected subscribed=false")
+	}
+	if !out.Ignored {
+		t.Fatalf("expected ignored=true")
+	}
+}
+
+func TestFetchNotificationThreadSubscriptionRejectsEmptyThreadID(t *testing.T) {
+	client := NewClient("", "https://api.github.com")
+	if _, err := client.FetchNotificationThreadSubscription(context.Background(), " "); err == nil {
+		t.Fatalf("expected error for empty thread id")
+	}
+}
+
 func TestFetchViewerUsesUserEndpoint(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {

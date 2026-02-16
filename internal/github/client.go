@@ -66,6 +66,11 @@ type Notification struct {
 	Subject    NotificationSubject    `json:"subject"`
 }
 
+type NotificationThreadSubscription struct {
+	Subscribed bool `json:"subscribed"`
+	Ignored    bool `json:"ignored"`
+}
+
 type RequestedReviewers struct {
 	Users []User `json:"users"`
 }
@@ -344,6 +349,20 @@ func (c *Client) UnsubscribeNotificationThread(ctx context.Context, threadID str
 	}
 
 	return nil
+}
+
+func (c *Client) FetchNotificationThreadSubscription(ctx context.Context, threadID string) (NotificationThreadSubscription, error) {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return NotificationThreadSubscription{}, fmt.Errorf("thread id is empty")
+	}
+
+	path := fmt.Sprintf("/notifications/threads/%s/subscription", url.PathEscape(threadID))
+	var out NotificationThreadSubscription
+	if err := c.getJSON(ctx, path, &out); err != nil {
+		return NotificationThreadSubscription{}, err
+	}
+	return out, nil
 }
 
 func (c *Client) FetchViewer(ctx context.Context) (User, error) {

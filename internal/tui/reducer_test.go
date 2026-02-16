@@ -2692,6 +2692,156 @@ func TestReviewReqStateLoadedKeepsExistingAuthorWhenMissingInPayload(t *testing.
 	}
 }
 
+func TestTimelineArrivedAutoMarksReadWhenActorIsViewer(t *testing.T) {
+	state := NewState()
+	state.ViewerLoaded = true
+	state.ViewerLogin = "alice"
+	state.CurrentRef = "o/r#1"
+	state.TimelineGen = 1
+	state.TimelineByRef[state.CurrentRef] = &timelineState{
+		ref:                state.CurrentRef,
+		rowIndexByID:       map[string]int{},
+		threadByID:         map[string]*threadGroup{},
+		expandedThreads:    map[string]bool{},
+		readByEventID:      map[string]bool{},
+		readKnownByEventID: map[string]bool{},
+		readLoadInFlight:   map[string]bool{},
+	}
+
+	ev := ghpr.TimelineEvent{ID: "e1", Type: "github.timeline.commented", OccurredAt: time.Now().UTC(), Actor: &ghpr.Actor{Login: "alice"}}
+	next, effects := Reduce(state, TimelineArrivedEvent{Generation: state.TimelineGen, Ref: state.CurrentRef, Event: ev})
+
+	ts := next.TimelineByRef[state.CurrentRef]
+	if !ts.readKnownByEventID["e1"] || !ts.readByEventID["e1"] {
+		t.Fatalf("expected self-authored timeline event to be marked read")
+	}
+	foundPersist := false
+	foundLoad := false
+	for _, eff := range effects {
+		switch e := eff.(type) {
+		case PersistReadStateEffect:
+			if e.Ref == state.CurrentRef && e.Read && len(e.EventIDs) == 1 && e.EventIDs[0] == "e1" {
+				foundPersist = true
+			}
+		case LoadReadStateEffect:
+			if e.Ref == state.CurrentRef && len(e.EventIDs) == 1 && e.EventIDs[0] == "e1" {
+				foundLoad = true
+			}
+		}
+	}
+	if !foundPersist {
+		t.Fatalf("expected PersistReadStateEffect for self-authored event")
+	}
+	if foundLoad {
+		t.Fatalf("expected no LoadReadStateEffect for self-authored event")
+	}
+}
+
+func TestTimelineArrivedLoadsReadStateWhenActorIsNotViewer(t *testing.T) {
+	state := NewState()
+	state.ViewerLoaded = true
+	state.ViewerLogin = "alice"
+	state.CurrentRef = "o/r#1"
+	state.TimelineGen = 1
+	state.TimelineByRef[state.CurrentRef] = &timelineState{
+		ref:                state.CurrentRef,
+		rowIndexByID:       map[string]int{},
+		threadByID:         map[string]*threadGroup{},
+		expandedThreads:    map[string]bool{},
+		readByEventID:      map[string]bool{},
+		readKnownByEventID: map[string]bool{},
+		readLoadInFlight:   map[string]bool{},
+	}
+
+	ev := ghpr.TimelineEvent{ID: "e1", Type: "github.timeline.commented", OccurredAt: time.Now().UTC(), Actor: &ghpr.Actor{Login: "bob"}}
+	next, effects := Reduce(state, TimelineArrivedEvent{Generation: state.TimelineGen, Ref: state.CurrentRef, Event: ev})
+
+	ts := next.TimelineByRef[state.CurrentRef]
+	if ts.readKnownByEventID["e1"] || ts.readByEventID["e1"] {
+		t.Fatalf("expected non-self-authored timeline event not to be auto-marked read")
+	}
+	foundPersist := false
+	foundLoad := false
+	for _, eff := range effects {
+		switch e := eff.(type) {
+		case PersistReadStateEffect:
+			if e.Ref == state.CurrentRef && len(e.EventIDs) == 1 && e.EventIDs[0] == "e1" {
+				foundPersist = true
+			}
+		case LoadReadStateEffect:
+			if e.Ref == state.CurrentRef && len(e.EventIDs) == 1 && e.EventIDs[0] == "e1" {
+				foundLoad = true
+			}
+		}
+	}
+	if foundPersist {
+		t.Fatalf("expected no PersistReadStateEffect for non-self-authored event")
+	}
+	if !foundLoad {
+		t.Fatalf("expected LoadReadStateEffect for non-self-authored event")
+	}
+}
+
+func TestReviewReqStateLoadedAutoMarksReadWhenViewerIsAuthor(t *testing.T) {
+	state := NewState()
+	state.ViewerLoaded = true
+	state.ViewerLogin = "alice"
+	state.Notifications = []notifRow{{id: "n1", ref: "o/r#1", repo: "o/r", title: "one", kind: "pr", updatedAt: time.Now()}}
+	state.rebuildNotifIndex()
+	state.CurrentRef = "o/r#1"
+	state.TimelineByRef[state.CurrentRef] = &timelineState{
+		ref:                state.CurrentRef,
+		rowIndexByID:       map[string]int{},
+		threadByID:         map[string]*threadGroup{},
+		expandedThreads:    map[string]bool{},
+		readByEventID:      map[string]bool{"e1": false},
+		readKnownByEventID: map[string]bool{"e1": true},
+		readLoadInFlight:   map[string]bool{},
+	}
+	state.TimelineByRef[state.CurrentRef].insertTimelineEvent(ghpr.TimelineEvent{ID: "e1", Type: "github.timeline.commented", OccurredAt: time.Now().UTC()})
+
+	next, effects := Reduce(state, ReviewReqStateLoadedEvent{Refs: []string{"o/r#1"}, AuthorByRef: map[string]string{"o/r#1": "alice"}})
+
+	if len(next.Notifications) != 1 {
+		t.Fatalf("expected notification to remain visible, got %d", len(next.Notifications))
+	}
+	if next.Notifications[0].author != "alice" {
+		t.Fatalf("expected notification author to be alice, got %q", next.Notifications[0].author)
+	}
+	if !next.ParentReadByRef["o/r#1"] {
+		t.Fatalf("expected viewer-authored notification to be marked read")
+	}
+	foundPersist := false
+	for _, eff := range effects {
+		if p, ok := eff.(PersistReadStateEffect); ok && p.Ref == "o/r#1" && p.Read {
+			foundPersist = true
+			break
+		}
+	}
+	if !foundPersist {
+		t.Fatalf("expected PersistReadStateEffect when viewer is notification author")
+	}
+}
+
+func TestReviewReqStateLoadedDoesNotAutoMarkReadWithoutViewer(t *testing.T) {
+	state := NewState()
+	state.ViewerLoaded = false
+	state.ViewerLogin = ""
+	state.Notifications = []notifRow{{id: "n1", ref: "o/r#1", repo: "o/r", title: "one", kind: "pr", updatedAt: time.Now()}}
+	state.rebuildNotifIndex()
+
+	next, effects := Reduce(state, ReviewReqStateLoadedEvent{Refs: []string{"o/r#1"}, AuthorByRef: map[string]string{"o/r#1": "alice"}})
+
+	if next.ParentReadByRef["o/r#1"] {
+		t.Fatalf("expected no auto-read parent override without viewer")
+	}
+	for _, eff := range effects {
+		if p, ok := eff.(PersistReadStateEffect); ok && p.Ref == "o/r#1" && p.Read {
+			t.Fatalf("expected no PersistReadStateEffect without viewer")
+		}
+	}
+}
+
 func TestNotificationsArrivedForPRDoesNotClearExistingAuthor(t *testing.T) {
 	state := NewState()
 	state.AuthorByRef["o/r#1"] = "alice"

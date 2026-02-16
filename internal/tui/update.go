@@ -634,6 +634,7 @@ func (m *model) startNotificationsLoader(ctx context.Context, cancel context.Can
 			defer cancel()
 		}
 		archived := map[string]time.Time{}
+		ignoredByThreadID := map[string]bool{}
 		if m.store != nil {
 			if loaded, err := m.store.ListArchivedThreads(ctx); err == nil {
 				archived = loaded
@@ -649,6 +650,10 @@ func (m *model) startNotificationsLoader(ctx context.Context, cancel context.Can
 					_ = m.store.UnmarkThreadArchived(ctx, item.ID)
 				}
 			}
+			skipIgnored, err := shouldSkipIgnoredNotification(ctx, m.client, item.ID, ignoredByThreadID)
+			if err == nil && skipIgnored {
+				return nil
+			}
 			m.msgCh <- notifArrivedMsg{gen: gen, item: item}
 			return nil
 		})
@@ -658,6 +663,25 @@ func (m *model) startNotificationsLoader(ctx context.Context, cancel context.Can
 		}
 		m.msgCh <- notifDoneMsg{gen: gen}
 	}()
+}
+
+func shouldSkipIgnoredNotification(ctx context.Context, client *ghpr.Client, threadID string, ignoredByThreadID map[string]bool) (bool, error) {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return false, nil
+	}
+	if ignored, ok := ignoredByThreadID[threadID]; ok {
+		return ignored, nil
+	}
+	if client == nil {
+		return false, errors.New("client unavailable")
+	}
+	subscription, err := client.FetchNotificationThreadSubscription(ctx, threadID)
+	if err != nil {
+		return false, err
+	}
+	ignoredByThreadID[threadID] = subscription.Ignored
+	return subscription.Ignored, nil
 }
 
 func shouldSkipArchivedNotification(item ghpr.NotificationEvent, archived map[string]time.Time) bool {
