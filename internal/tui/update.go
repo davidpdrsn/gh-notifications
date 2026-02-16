@@ -117,6 +117,15 @@ type archiveNotificationErrMsg struct {
 	err  error
 }
 
+type unsubscribeNotificationSucceededMsg struct {
+	opID int64
+}
+
+type unsubscribeNotificationErrMsg struct {
+	opID int64
+	err  error
+}
+
 type commitDiffLoadedMsg struct {
 	ref     string
 	eventID string
@@ -240,6 +249,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case archiveNotificationErrMsg:
 		asyncMsg = true
 		events = append(events, ArchiveNotificationFailedEvent{OpID: t.opID, Err: t.err.Error()})
+	case unsubscribeNotificationSucceededMsg:
+		asyncMsg = true
+		events = append(events, UnsubscribeNotificationSucceededEvent{OpID: t.opID})
+	case unsubscribeNotificationErrMsg:
+		asyncMsg = true
+		events = append(events, UnsubscribeNotificationFailedEvent{OpID: t.opID, Err: t.err.Error()})
 	case commitDiffLoadedMsg:
 		asyncMsg = true
 		events = append(events, CommitDiffLoadedEvent{Ref: t.ref, EventID: t.eventID, Diff: t.diff})
@@ -348,6 +363,8 @@ func (m *model) applyEffects(effects []Effect) {
 			m.startReviewReqStateLoader(e.Refs)
 		case ArchiveNotificationEffect:
 			m.startArchiveNotification(e.OpID, e.ThreadID, e.UpdatedAt)
+		case UnsubscribeNotificationEffect:
+			m.startUnsubscribeNotification(e.OpID, e.ThreadID, e.UpdatedAt)
 		case ScheduleAutoRefreshTickEffect:
 			m.scheduleAutoRefreshTick()
 		case ScheduleRefreshSpinnerTickEffect:
@@ -539,6 +556,27 @@ func (m *model) startArchiveNotification(opID int64, threadID string, updatedAt 
 			_ = m.store.MarkThreadArchived(m.ctx, threadID, updatedAt)
 		}
 		m.msgCh <- archiveNotificationSucceededMsg{opID: opID}
+	}()
+}
+
+func (m *model) startUnsubscribeNotification(opID int64, threadID string, updatedAt time.Time) {
+	go func() {
+		if m.client == nil {
+			m.msgCh <- unsubscribeNotificationErrMsg{opID: opID, err: errors.New("client unavailable")}
+			return
+		}
+		if err := m.client.UnsubscribeNotificationThread(m.ctx, threadID); err != nil {
+			m.msgCh <- unsubscribeNotificationErrMsg{opID: opID, err: err}
+			return
+		}
+		if err := m.client.ArchiveNotificationThread(m.ctx, threadID); err != nil {
+			m.msgCh <- unsubscribeNotificationErrMsg{opID: opID, err: err}
+			return
+		}
+		if m.store != nil && !updatedAt.IsZero() {
+			_ = m.store.MarkThreadArchived(m.ctx, threadID, updatedAt)
+		}
+		m.msgCh <- unsubscribeNotificationSucceededMsg{opID: opID}
 	}()
 }
 

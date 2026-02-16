@@ -28,49 +28,50 @@ type model struct {
 }
 
 type styles struct {
-	title           lipgloss.Style
-	text            lipgloss.Style
-	secondary       lipgloss.Style
-	selected        lipgloss.Style
-	selectedMuted   lipgloss.Style
-	current         lipgloss.Style
-	currentMuted    lipgloss.Style
-	muted           lipgloss.Style
-	unreadMarker    lipgloss.Style
-	unreadSelected  lipgloss.Style
-	unreadCurrent   lipgloss.Style
-	kindPR          lipgloss.Style
-	kindIS          lipgloss.Style
-	kindUnknown     lipgloss.Style
-	kindPRDraft     lipgloss.Style
-	kindPRWaiting   lipgloss.Style
-	kindPRSelected  lipgloss.Style
-	kindISSelected  lipgloss.Style
-	kindUnkSelected lipgloss.Style
-	kindPRDraftSel  lipgloss.Style
-	kindPRWaitSel   lipgloss.Style
-	kindPRCurrent   lipgloss.Style
-	kindISCurrent   lipgloss.Style
-	kindUnkCurrent  lipgloss.Style
-	kindPRDraftCur  lipgloss.Style
-	kindPRWaitCur   lipgloss.Style
-	error           lipgloss.Style
-	status          lipgloss.Style
-	tab             lipgloss.Style
-	tabActive       lipgloss.Style
-	separator       lipgloss.Style
-	inactiveColumn  lipgloss.Style
-	eventInfo       lipgloss.Style
-	eventSuccess    lipgloss.Style
-	eventWarning    lipgloss.Style
-	eventDanger     lipgloss.Style
-	confirmOverlay  lipgloss.Style
-	diffHeader      lipgloss.Style
-	diffHunk        lipgloss.Style
-	diffAdd         lipgloss.Style
-	diffDel         lipgloss.Style
-	lineNumber      lipgloss.Style
-	lineNumberZero  lipgloss.Style
+	title                     lipgloss.Style
+	text                      lipgloss.Style
+	secondary                 lipgloss.Style
+	selected                  lipgloss.Style
+	selectedMuted             lipgloss.Style
+	current                   lipgloss.Style
+	currentMuted              lipgloss.Style
+	muted                     lipgloss.Style
+	unreadMarker              lipgloss.Style
+	unreadSelected            lipgloss.Style
+	unreadCurrent             lipgloss.Style
+	kindPR                    lipgloss.Style
+	kindIS                    lipgloss.Style
+	kindUnknown               lipgloss.Style
+	kindPRDraft               lipgloss.Style
+	kindPRWaiting             lipgloss.Style
+	kindPRSelected            lipgloss.Style
+	kindISSelected            lipgloss.Style
+	kindUnkSelected           lipgloss.Style
+	kindPRDraftSel            lipgloss.Style
+	kindPRWaitSel             lipgloss.Style
+	kindPRCurrent             lipgloss.Style
+	kindISCurrent             lipgloss.Style
+	kindUnkCurrent            lipgloss.Style
+	kindPRDraftCur            lipgloss.Style
+	kindPRWaitCur             lipgloss.Style
+	error                     lipgloss.Style
+	status                    lipgloss.Style
+	tab                       lipgloss.Style
+	tabActive                 lipgloss.Style
+	separator                 lipgloss.Style
+	inactiveColumn            lipgloss.Style
+	eventInfo                 lipgloss.Style
+	eventSuccess              lipgloss.Style
+	eventWarning              lipgloss.Style
+	eventDanger               lipgloss.Style
+	confirmOverlayArchive     lipgloss.Style
+	confirmOverlayUnsubscribe lipgloss.Style
+	diffHeader                lipgloss.Style
+	diffHunk                  lipgloss.Style
+	diffAdd                   lipgloss.Style
+	diffDel                   lipgloss.Style
+	lineNumber                lipgloss.Style
+	lineNumberZero            lipgloss.Style
 }
 
 func newModel(ctx context.Context, client *ghpr.Client, store *readstate.Store) *model {
@@ -130,9 +131,13 @@ func newModel(ctx context.Context, client *ghpr.Client, store *readstate.Store) 
 			eventSuccess:   lipgloss.NewStyle().Foreground(t.success),
 			eventWarning:   lipgloss.NewStyle().Foreground(t.warning),
 			eventDanger:    lipgloss.NewStyle().Foreground(t.danger),
-			confirmOverlay: lipgloss.NewStyle().
+			confirmOverlayArchive: lipgloss.NewStyle().
 				Foreground(lipgloss.Color("#11111b")).
 				Background(t.success).
+				Bold(true),
+			confirmOverlayUnsubscribe: lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#11111b")).
+				Background(t.info).
 				Bold(true),
 			diffHeader: lipgloss.NewStyle().Foreground(t.info),
 			diffHunk:   lipgloss.NewStyle().Foreground(t.warning),
@@ -168,7 +173,7 @@ func (m *model) bottomStatus() string {
 	}
 	if m.state.ConfirmIntent != nil && !m.confirmIntentVisibleInNotificationsPane() {
 		targets := confirmIntentTargetSet(m.state.ConfirmIntent)
-		parts = append(parts, fmt.Sprintf("%s %d selected [a] confirm [esc] cancel", confirmActionDisplayName(m.state.ConfirmIntent.Kind), len(targets)))
+		parts = append(parts, fmt.Sprintf("%s %d selected [%s] confirm [esc] cancel", confirmActionDisplayName(m.state.ConfirmIntent.Kind), len(targets), confirmActionKey(m.state.ConfirmIntent.Kind)))
 	}
 	if m.state.RefreshInFlight {
 		spinnerFrames := []string{"-", "\\", "|", "/"}
@@ -244,6 +249,15 @@ func (m *model) confirmIntentVisibleInNotificationsPane() bool {
 		}
 	}
 	return false
+}
+
+func (m *model) confirmOverlayStyle(kind confirmActionKind) lipgloss.Style {
+	switch kind {
+	case confirmActionUnsubscribe:
+		return m.styles.confirmOverlayUnsubscribe
+	default:
+		return m.styles.confirmOverlayArchive
+	}
 }
 
 func relativeRefreshAge(ts time.Time) string {

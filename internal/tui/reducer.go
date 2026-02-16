@@ -111,6 +111,15 @@ type ArchiveNotificationFailedEvent struct {
 	Err  string
 }
 
+type UnsubscribeNotificationSucceededEvent struct {
+	OpID int64
+}
+
+type UnsubscribeNotificationFailedEvent struct {
+	OpID int64
+	Err  string
+}
+
 type CommitDiffLoadedEvent struct {
 	Ref     string
 	EventID string
@@ -160,32 +169,34 @@ type MouseWheelEvent struct {
 type AutoRefreshTickEvent struct{}
 type RefreshSpinnerTickEvent struct{}
 
-func (InitEvent) isEvent()                         {}
-func (WindowSizeEvent) isEvent()                   {}
-func (KeyEvent) isEvent()                          {}
-func (NotificationsArrivedEvent) isEvent()         {}
-func (NotificationsDoneEvent) isEvent()            {}
-func (NotificationsErrEvent) isEvent()             {}
-func (TimelineArrivedEvent) isEvent()              {}
-func (TimelineWarnEvent) isEvent()                 {}
-func (TimelineDoneEvent) isEvent()                 {}
-func (TimelineErrEvent) isEvent()                  {}
-func (ReadStateLoadedEvent) isEvent()              {}
-func (ReadStateLoadFailedEvent) isEvent()          {}
-func (ReadStatePersistedEvent) isEvent()           {}
-func (ReadStatePersistFailedEvent) isEvent()       {}
-func (ParentReadStateLoadedEvent) isEvent()        {}
-func (ParentReadStateLoadFailedEvent) isEvent()    {}
-func (ParentReadStatePersistedEvent) isEvent()     {}
-func (ParentReadStatePersistFailedEvent) isEvent() {}
-func (ViewerLoadedEvent) isEvent()                 {}
-func (ViewerLoadFailedEvent) isEvent()             {}
-func (ReviewReqStateLoadedEvent) isEvent()         {}
-func (ReviewReqStateLoadFailedEvent) isEvent()     {}
-func (ArchiveNotificationSucceededEvent) isEvent() {}
-func (ArchiveNotificationFailedEvent) isEvent()    {}
-func (CommitDiffLoadedEvent) isEvent()             {}
-func (CommitDiffErrEvent) isEvent()                {}
+func (InitEvent) isEvent()                             {}
+func (WindowSizeEvent) isEvent()                       {}
+func (KeyEvent) isEvent()                              {}
+func (NotificationsArrivedEvent) isEvent()             {}
+func (NotificationsDoneEvent) isEvent()                {}
+func (NotificationsErrEvent) isEvent()                 {}
+func (TimelineArrivedEvent) isEvent()                  {}
+func (TimelineWarnEvent) isEvent()                     {}
+func (TimelineDoneEvent) isEvent()                     {}
+func (TimelineErrEvent) isEvent()                      {}
+func (ReadStateLoadedEvent) isEvent()                  {}
+func (ReadStateLoadFailedEvent) isEvent()              {}
+func (ReadStatePersistedEvent) isEvent()               {}
+func (ReadStatePersistFailedEvent) isEvent()           {}
+func (ParentReadStateLoadedEvent) isEvent()            {}
+func (ParentReadStateLoadFailedEvent) isEvent()        {}
+func (ParentReadStatePersistedEvent) isEvent()         {}
+func (ParentReadStatePersistFailedEvent) isEvent()     {}
+func (ViewerLoadedEvent) isEvent()                     {}
+func (ViewerLoadFailedEvent) isEvent()                 {}
+func (ReviewReqStateLoadedEvent) isEvent()             {}
+func (ReviewReqStateLoadFailedEvent) isEvent()         {}
+func (ArchiveNotificationSucceededEvent) isEvent()     {}
+func (ArchiveNotificationFailedEvent) isEvent()        {}
+func (UnsubscribeNotificationSucceededEvent) isEvent() {}
+func (UnsubscribeNotificationFailedEvent) isEvent()    {}
+func (CommitDiffLoadedEvent) isEvent()                 {}
+func (CommitDiffErrEvent) isEvent()                    {}
 func (ForcePushInterdiffLoadedEvent) isEvent() {
 }
 func (ForcePushInterdiffErrEvent) isEvent() {}
@@ -245,6 +256,12 @@ type ArchiveNotificationEffect struct {
 	UpdatedAt time.Time
 }
 
+type UnsubscribeNotificationEffect struct {
+	OpID      int64
+	ThreadID  string
+	UpdatedAt time.Time
+}
+
 type OpenURLEffect struct{ URL string }
 type ScheduleAutoRefreshTickEffect struct{}
 type ScheduleRefreshSpinnerTickEffect struct{}
@@ -255,15 +272,16 @@ func (CancelTimelineEffect) isEffect()     {}
 func (StartCommitDiffEffect) isEffect()    {}
 func (StartForcePushInterdiffEffect) isEffect() {
 }
-func (CopyColumnEffect) isEffect()             {}
-func (LoadReadStateEffect) isEffect()          {}
-func (PersistReadStateEffect) isEffect()       {}
-func (LoadParentReadStateEffect) isEffect()    {}
-func (PersistParentReadStateEffect) isEffect() {}
-func (LoadViewerEffect) isEffect()             {}
-func (LoadReviewReqStateEffect) isEffect()     {}
-func (ArchiveNotificationEffect) isEffect()    {}
-func (OpenURLEffect) isEffect()                {}
+func (CopyColumnEffect) isEffect()              {}
+func (LoadReadStateEffect) isEffect()           {}
+func (PersistReadStateEffect) isEffect()        {}
+func (LoadParentReadStateEffect) isEffect()     {}
+func (PersistParentReadStateEffect) isEffect()  {}
+func (LoadViewerEffect) isEffect()              {}
+func (LoadReviewReqStateEffect) isEffect()      {}
+func (ArchiveNotificationEffect) isEffect()     {}
+func (UnsubscribeNotificationEffect) isEffect() {}
+func (OpenURLEffect) isEffect()                 {}
 func (ScheduleAutoRefreshTickEffect) isEffect() {
 }
 func (ScheduleRefreshSpinnerTickEffect) isEffect() {
@@ -305,7 +323,7 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 				effects = append(effects, CancelTimelineEffect{})
 			case "esc", "backspace":
 				cancelConfirmIntent(&state)
-			case "a":
+			case confirmActionKey(state.ConfirmIntent.Kind):
 				confirmActiveIntent(&state, &effects)
 			}
 			break
@@ -357,6 +375,9 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 		case "a":
 			clearMotionCount(&state)
 			openConfirmIntent(&state, &effects, confirmActionArchive)
+		case "u":
+			clearMotionCount(&state)
+			openConfirmIntent(&state, &effects, confirmActionUnsubscribe)
 		case "A", "shift+a", "shift+A":
 			clearMotionCount(&state)
 			toggleMarkAllInCurrentView(&state)
@@ -743,6 +764,25 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 		closeConfirmIntent(&state)
 		state.Focus = pending.from
 		state.Status = "archive failed: " + e.Err
+	case UnsubscribeNotificationSucceededEvent:
+		pending, ok := state.PendingUnsubscribe[e.OpID]
+		if !ok {
+			break
+		}
+		delete(state.PendingUnsubscribe, e.OpID)
+		removeNotificationByID(&state, &effects, pending.notifID)
+		closeConfirmIntent(&state)
+		state.Focus = focusNotifications
+		state.Status = "unsubscribed and archived notification"
+	case UnsubscribeNotificationFailedEvent:
+		pending, ok := state.PendingUnsubscribe[e.OpID]
+		if !ok {
+			break
+		}
+		delete(state.PendingUnsubscribe, e.OpID)
+		closeConfirmIntent(&state)
+		state.Focus = pending.from
+		state.Status = "unsubscribe failed: " + e.Err
 	case CommitDiffLoadedEvent:
 		if ts := state.TimelineByRef[e.Ref]; ts != nil {
 			if ts.commitDiffByID == nil {
@@ -3511,9 +3551,50 @@ func openConfirmIntent(state *AppState, effects *[]Effect, kind confirmActionKin
 	switch kind {
 	case confirmActionArchive:
 		openArchiveIntent(state, effects)
+	case confirmActionUnsubscribe:
+		openUnsubscribeIntent(state, effects)
 	default:
 		state.Status = "unsupported confirmation action"
 	}
+}
+
+func openUnsubscribeIntent(state *AppState, effects *[]Effect) {
+	targets := archiveTargetNotifications(*state)
+	if len(targets) == 0 {
+		state.Status = "nothing to unsubscribe"
+		return
+	}
+	filtered := make([]notifRow, 0, len(targets))
+	skippedNonPR := 0
+	for _, target := range targets {
+		if strings.TrimSpace(strings.ToLower(target.kind)) != "pr" {
+			skippedNonPR++
+			continue
+		}
+		if hasPendingArchiveForNotif(*state, target.id) || hasPendingUnsubscribeForNotif(*state, target.id) {
+			continue
+		}
+		filtered = append(filtered, target)
+	}
+	if len(filtered) == 0 {
+		if skippedNonPR > 0 {
+			state.Status = "unsubscribe only supports pull requests"
+			return
+		}
+		state.Status = "unsubscribe already in progress"
+		return
+	}
+	notifIDs := make([]string, 0, len(filtered))
+	for _, t := range filtered {
+		notifIDs = append(notifIDs, t.id)
+	}
+	state.ConfirmIntent = &confirmIntentState{
+		Kind:           confirmActionUnsubscribe,
+		TargetNotifIDs: notifIDs,
+		PrimaryNotifID: filtered[0].id,
+		From:           state.Focus,
+	}
+	state.Status = "press u again to confirm unsubscribe"
 }
 
 func openArchiveIntent(state *AppState, effects *[]Effect) {
@@ -3526,7 +3607,7 @@ func openArchiveIntent(state *AppState, effects *[]Effect) {
 	blockedReview := 0
 	blockedUnknown := 0
 	for _, target := range targets {
-		if hasPendingArchiveForNotif(*state, target.id) {
+		if hasPendingArchiveForNotif(*state, target.id) || hasPendingUnsubscribeForNotif(*state, target.id) {
 			continue
 		}
 		allow, reason := archiveAllowedForNotification(state, effects, target)
@@ -3581,8 +3662,11 @@ func cancelConfirmIntent(state *AppState) {
 	if state == nil || state.ConfirmIntent == nil {
 		return
 	}
-	if state.ConfirmIntent.Kind == confirmActionArchive {
+	switch state.ConfirmIntent.Kind {
+	case confirmActionArchive:
 		state.Status = "archive canceled"
+	case confirmActionUnsubscribe:
+		state.Status = "unsubscribe canceled"
 	}
 	closeConfirmIntent(state)
 }
@@ -3595,6 +3679,8 @@ func confirmActiveIntent(state *AppState, effects *[]Effect) {
 	switch intent.Kind {
 	case confirmActionArchive:
 		confirmArchiveIntent(state, effects, intent)
+	case confirmActionUnsubscribe:
+		confirmUnsubscribeIntent(state, effects, intent)
 	default:
 		state.Status = "unsupported confirmation action"
 		closeConfirmIntent(state)
@@ -3613,7 +3699,7 @@ func confirmArchiveIntent(state *AppState, effects *[]Effect, intent confirmInte
 	}
 	queued := 0
 	for _, notifID := range notifIDs {
-		if hasPendingArchiveForNotif(*state, notifID) {
+		if hasPendingArchiveForNotif(*state, notifID) || hasPendingUnsubscribeForNotif(*state, notifID) {
 			continue
 		}
 		n, ok := notificationByID(*state, notifID)
@@ -3643,6 +3729,46 @@ func confirmArchiveIntent(state *AppState, effects *[]Effect, intent confirmInte
 		return
 	}
 	state.Status = "archiving notification..."
+}
+
+func confirmUnsubscribeIntent(state *AppState, effects *[]Effect, intent confirmIntentState) {
+	notifIDs := append([]string(nil), intent.TargetNotifIDs...)
+	if len(notifIDs) == 0 && strings.TrimSpace(intent.PrimaryNotifID) != "" {
+		notifIDs = []string{intent.PrimaryNotifID}
+	}
+	if len(notifIDs) == 0 {
+		closeConfirmIntent(state)
+		state.Status = "notification no longer available"
+		return
+	}
+	queued := 0
+	for _, notifID := range notifIDs {
+		if hasPendingArchiveForNotif(*state, notifID) || hasPendingUnsubscribeForNotif(*state, notifID) {
+			continue
+		}
+		n, ok := notificationByID(*state, notifID)
+		if !ok || strings.TrimSpace(strings.ToLower(n.kind)) != "pr" {
+			continue
+		}
+		markNotificationRead(state, effects, n)
+
+		state.NextUnsubscribeOpID++
+		opID := state.NextUnsubscribeOpID
+		if state.PendingUnsubscribe == nil {
+			state.PendingUnsubscribe = make(map[int64]pendingArchiveOp)
+		}
+		state.PendingUnsubscribe[opID] = pendingArchiveOp{notifID: n.id, ref: n.ref, threadID: n.id, from: intent.From}
+		*effects = append(*effects, UnsubscribeNotificationEffect{OpID: opID, ThreadID: n.id, UpdatedAt: n.updatedAt})
+		clearNotifMarked(state, n.id)
+		queued++
+	}
+	clearArchiveActedMarks(state, intent.From)
+	closeConfirmIntent(state)
+	if queued == 0 {
+		state.Status = "notification no longer available"
+		return
+	}
+	state.Status = "unsubscribing and archiving notification..."
 }
 
 func clearArchiveActedMarks(state *AppState, from focusColumn) {
@@ -3684,6 +3810,19 @@ func hasPendingArchiveForNotif(state AppState, notifID string) bool {
 	}
 	for _, pending := range state.PendingArchive {
 		if pending.notifID == notifID {
+			return true
+		}
+	}
+	return false
+}
+
+func hasPendingUnsubscribeForNotif(state AppState, notifID string) bool {
+	notifID = strings.TrimSpace(notifID)
+	if notifID == "" {
+		return false
+	}
+	for _, pending := range state.PendingUnsubscribe {
+		if strings.TrimSpace(pending.notifID) == notifID {
 			return true
 		}
 	}

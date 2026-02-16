@@ -106,6 +106,7 @@ func (m *model) renderHelpModal() string {
 		{key: "alt+space", desc: "mark/unmark row and move up"},
 		{key: "shift+a", desc: "mark/unmark all in current list"},
 		{key: "a", desc: "archive notification (a then a confirms)"},
+		{key: "u", desc: "unsubscribe + archive (u then u confirms)"},
 		{key: "C", desc: "copy focused column"},
 	})
 	view := m.renderHelpBindingSection("View & scroll", []helpBinding{
@@ -205,7 +206,7 @@ func overlayModalCentered(base, modal string, width, height int) string {
 }
 
 func confirmPrimaryOverlayText(kind confirmActionKind, more int) string {
-	text := fmt.Sprintf("<< %s >> [a confirm | esc cancel]", confirmActionDisplayName(kind))
+	text := fmt.Sprintf("<< %s >> [%s confirm | esc cancel]", confirmActionDisplayName(kind), confirmActionKey(kind))
 	if more > 0 {
 		text += fmt.Sprintf(" +%d", more)
 	}
@@ -365,7 +366,7 @@ func (m *model) renderNotifications(width, height int) string {
 		}
 		if confirmTargets[n.id] && len(rendered) > 0 {
 			if i == primaryConfirmRow {
-				overlay := m.styles.confirmOverlay.Render(clampDisplayWidth(confirmPrimaryOverlayText(m.state.ConfirmIntent.Kind, moreConfirmTargets), avail))
+				overlay := m.confirmOverlayStyle(m.state.ConfirmIntent.Kind).Render(clampDisplayWidth(confirmPrimaryOverlayText(m.state.ConfirmIntent.Kind, moreConfirmTargets), avail))
 				rendered[0] = overlayLineLeft(rendered[0], overlay, avail, m.styles.muted.Strikethrough(true))
 			} else {
 				overlay := m.styles.muted.Render(clampDisplayWidth("<< "+confirmActionMarkerLabel(m.state.ConfirmIntent.Kind)+" >>", avail))

@@ -6,6 +6,8 @@ func confirmActionDisplayName(kind confirmActionKind) string {
 	switch kind {
 	case confirmActionArchive:
 		return "archive"
+	case confirmActionUnsubscribe:
+		return "unsubscribe"
 	default:
 		return "action"
 	}
@@ -15,6 +17,8 @@ func confirmActionPrompt(kind confirmActionKind) string {
 	switch kind {
 	case confirmActionArchive:
 		return "Archive selected?"
+	case confirmActionUnsubscribe:
+		return "Unsubscribe selected?"
 	default:
 		return "Confirm action?"
 	}
@@ -24,8 +28,21 @@ func confirmActionMarkerLabel(kind confirmActionKind) string {
 	switch kind {
 	case confirmActionArchive:
 		return "archive target"
+	case confirmActionUnsubscribe:
+		return "unsubscribe target"
 	default:
 		return "target"
+	}
+}
+
+func confirmActionKey(kind confirmActionKind) string {
+	switch kind {
+	case confirmActionArchive:
+		return "a"
+	case confirmActionUnsubscribe:
+		return "u"
+	default:
+		return "enter"
 	}
 }
 

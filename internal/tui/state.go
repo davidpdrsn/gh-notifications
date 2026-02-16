@@ -160,6 +160,8 @@ type AppState struct {
 	PendingParentRead           map[int64]pendingParentReadOp
 	NextArchiveOpID             int64
 	PendingArchive              map[int64]pendingArchiveOp
+	NextUnsubscribeOpID         int64
+	PendingUnsubscribe          map[int64]pendingArchiveOp
 	ParentReadByRef             map[string]bool
 	ParentReadLoadedByRef       map[string]bool
 	ParentReadLoadInFlightByRef map[string]bool
@@ -208,7 +210,8 @@ type pendingArchiveOp struct {
 type confirmActionKind string
 
 const (
-	confirmActionArchive confirmActionKind = "archive"
+	confirmActionArchive     confirmActionKind = "archive"
+	confirmActionUnsubscribe confirmActionKind = "unsubscribe"
 )
 
 type confirmIntentState struct {
@@ -235,6 +238,7 @@ func NewState() AppState {
 		PendingRead:                 make(map[int64]pendingReadOp),
 		PendingParentRead:           make(map[int64]pendingParentReadOp),
 		PendingArchive:              make(map[int64]pendingArchiveOp),
+		PendingUnsubscribe:          make(map[int64]pendingArchiveOp),
 		ParentReadByRef:             make(map[string]bool),
 		ParentReadLoadedByRef:       make(map[string]bool),
 		ParentReadLoadInFlightByRef: make(map[string]bool),

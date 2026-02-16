@@ -2915,6 +2915,79 @@ func TestArchiveBlockedWhenWaitingOnMyReview(t *testing.T) {
 	}
 }
 
+func TestUnsubscribeKeyOpensConfirmForPR(t *testing.T) {
+	state := NewState()
+	state.Focus = focusNotifications
+	state.Notifications = []notifRow{{id: "42", repo: "o/r", title: "title", kind: "pr", ref: "o/r#1", updatedAt: time.Now().UTC()}}
+	state.rebuildNotifIndex()
+	state.SelectedNotif = "42"
+	state.NotifSelected = 0
+	state.CurrentRef = "o/r#1"
+
+	next, effects := Reduce(state, KeyEvent{Key: "u"})
+
+	if next.ConfirmIntent == nil {
+		t.Fatalf("expected unsubscribe confirm intent to open")
+	}
+	if next.ConfirmIntent.Kind != confirmActionUnsubscribe {
+		t.Fatalf("expected unsubscribe intent kind, got %q", next.ConfirmIntent.Kind)
+	}
+	if len(next.ConfirmIntent.TargetNotifIDs) != 1 || next.ConfirmIntent.TargetNotifIDs[0] != "42" {
+		t.Fatalf("expected target notif id 42, got %+v", next.ConfirmIntent.TargetNotifIDs)
+	}
+	if len(effects) != 0 {
+		t.Fatalf("expected no side effects before confirmation, got %d", len(effects))
+	}
+}
+
+func TestUnsubscribeConfirmQueuesUnsubscribeAndArchiveEffect(t *testing.T) {
+	state := NewState()
+	state.Focus = focusTimeline
+	state.Notifications = []notifRow{{id: "42", repo: "o/r", title: "title", kind: "pr", ref: "o/r#1", updatedAt: time.Now().UTC()}}
+	state.rebuildNotifIndex()
+	state.SelectedNotif = "42"
+	state.NotifSelected = 0
+	state.CurrentRef = "o/r#1"
+	state.TimelineByRef[state.CurrentRef] = &timelineState{
+		ref:                state.CurrentRef,
+		rowIndexByID:       map[string]int{},
+		threadByID:         map[string]*threadGroup{},
+		expandedThreads:    map[string]bool{},
+		readByEventID:      map[string]bool{"e1": false},
+		readKnownByEventID: map[string]bool{"e1": true},
+		readLoadInFlight:   map[string]bool{},
+	}
+	body := "body"
+	state.TimelineByRef[state.CurrentRef].insertTimelineEvent(ghpr.TimelineEvent{ID: "e1", Type: "github.timeline.commented", OccurredAt: time.Now().UTC(), Comment: &ghpr.CommentContext{Body: &body}})
+
+	next, _ := Reduce(state, KeyEvent{Key: "u"})
+	next, effects := Reduce(next, KeyEvent{Key: "u"})
+
+	if next.ConfirmIntent != nil {
+		t.Fatalf("expected confirm intent to close after confirmation")
+	}
+	foundUnsub := false
+	unsubOpID := int64(0)
+	for _, eff := range effects {
+		switch e := eff.(type) {
+		case UnsubscribeNotificationEffect:
+			foundUnsub = true
+			unsubOpID = e.OpID
+			if e.ThreadID != "42" {
+				t.Fatalf("expected unsubscribe thread id 42, got %q", e.ThreadID)
+			}
+		}
+	}
+	if !foundUnsub {
+		t.Fatalf("expected UnsubscribeNotificationEffect")
+	}
+
+	next, _ = Reduce(next, UnsubscribeNotificationSucceededEvent{OpID: unsubOpID})
+	if len(next.Notifications) != 0 {
+		t.Fatalf("expected notification removed after unsubscribe success")
+	}
+}
+
 func TestHelpPopupOpensWithQuestionAndClosesWithQuestion(t *testing.T) {
 	state := NewState()
 

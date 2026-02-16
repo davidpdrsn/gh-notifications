@@ -135,6 +135,10 @@ func (c *Client) ArchiveNotificationThread(ctx context.Context, threadID string)
 	return c.github.ArchiveNotificationThread(ctx, threadID)
 }
 
+func (c *Client) UnsubscribeNotificationThread(ctx context.Context, threadID string) error {
+	return c.github.UnsubscribeNotificationThread(ctx, threadID)
+}
+
 func (c *Client) FetchViewerLogin(ctx context.Context) (string, error) {
 	viewer, err := c.github.FetchViewer(ctx)
 	if err != nil {
