@@ -2604,6 +2604,54 @@ func TestAutoRefreshTickUsesParallelTimelineWorkers(t *testing.T) {
 	}
 }
 
+func TestRefreshNotificationsArrivalKeepsLoadedPRRowsVisibleAndForcesReviewReload(t *testing.T) {
+	state := NewState()
+	state.ViewerLoaded = true
+	state.ViewerLogin = "alice"
+	state.RefreshInFlight = true
+	state.RefreshStage = "notifications"
+	state.Notifications = []notifRow{{id: "n1", repo: "o/r", title: "one", kind: "pr", ref: "o/r#1", author: "alice", updatedAt: time.Now().UTC()}}
+	state.rebuildNotifIndex()
+	state.SelectedNotif = "n1"
+	state.NotifSelected = 0
+	state.CurrentRef = "o/r#1"
+	state.ReviewReqLoadedByRef["o/r#1"] = true
+	state.ReviewReqByRef["o/r#1"] = true
+
+	next, effects := Reduce(state, NotificationsArrivedEvent{
+		Generation: state.NotifGen,
+		Item: ghpr.NotificationEvent{
+			ID:         "n1",
+			UpdatedAt:  time.Now().UTC().Add(10 * time.Second),
+			Repository: ghpr.NotificationRepository{Owner: "o", Repo: "r"},
+			Subject:    ghpr.NotificationSubject{Title: "one"},
+			Target:     ghpr.NotificationTarget{Kind: "pr", Number: 1, Ref: "o/r#1"},
+		},
+	})
+
+	if !next.ReviewReqLoadedByRef["o/r#1"] {
+		t.Fatalf("expected existing review-load readiness to be preserved during refresh")
+	}
+	visible := next.visibleNotifications()
+	if len(visible) != 1 || visible[0].id != "n1" {
+		t.Fatalf("expected existing PR row to remain visible during refresh, got %+v", visible)
+	}
+	foundReviewLoad := false
+	for _, eff := range effects {
+		if load, ok := eff.(LoadReviewReqStateEffect); ok {
+			for _, ref := range load.Refs {
+				if ref == "o/r#1" {
+					foundReviewLoad = true
+					break
+				}
+			}
+		}
+	}
+	if !foundReviewLoad {
+		t.Fatalf("expected forced review-state reload for refreshed PR row")
+	}
+}
+
 func TestFinishRefreshDoesNotSetRefreshedStatus(t *testing.T) {
 	state := NewState()
 	state.CurrentRef = "o/r#1"

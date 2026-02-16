@@ -437,14 +437,8 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 		if e.Generation == state.NotifGen {
 			queueParentReadStateLoadsForRefs(&state, &effects, []string{e.Item.Target.Ref})
 			if e.Item.Target.Kind == "pr" {
-				delete(state.ReviewReqByRef, e.Item.Target.Ref)
-				delete(state.ReviewReqMergedByRef, e.Item.Target.Ref)
-				delete(state.ReviewReqClosedByRef, e.Item.Target.Ref)
-				delete(state.ReviewReqDraftByRef, e.Item.Target.Ref)
-				delete(state.ReviewReqLoadedByRef, e.Item.Target.Ref)
-				delete(state.ReviewReqLoadInFlightByRef, e.Item.Target.Ref)
 				invalidateNotifMarkerCacheForRef(&state, e.Item.Target.Ref)
-				enqueueReviewReqLoadForRef(&state, &effects, e.Item.Target.Ref)
+				enqueueReviewReqLoadForRefForced(&state, &effects, e.Item.Target.Ref)
 			}
 			if state.RefreshInFlight && state.RefreshStage == "notifications" {
 				insertRefreshNotification(&state, e.Item)
@@ -2975,7 +2969,15 @@ func enqueueReviewReqLoadForRef(state *AppState, effects *[]Effect, ref string) 
 	queueReviewReqStateLoadsForRefs(state, effects, []string{ref})
 }
 
+func enqueueReviewReqLoadForRefForced(state *AppState, effects *[]Effect, ref string) {
+	queueReviewReqStateLoadsForRefsWithForce(state, effects, []string{ref}, true)
+}
+
 func queueReviewReqStateLoadsForRefs(state *AppState, effects *[]Effect, refs []string) {
+	queueReviewReqStateLoadsForRefsWithForce(state, effects, refs, false)
+}
+
+func queueReviewReqStateLoadsForRefsWithForce(state *AppState, effects *[]Effect, refs []string, force bool) {
 	if state == nil || !state.ViewerLoaded || strings.TrimSpace(state.ViewerLogin) == "" {
 		return
 	}
@@ -2989,7 +2991,10 @@ func queueReviewReqStateLoadsForRefs(state *AppState, effects *[]Effect, refs []
 	seen := make(map[string]bool, len(refs))
 	for _, ref := range refs {
 		ref = strings.TrimSpace(ref)
-		if ref == "" || seen[ref] || state.ReviewReqLoadedByRef[ref] || state.ReviewReqLoadInFlightByRef[ref] {
+		if ref == "" || seen[ref] || state.ReviewReqLoadInFlightByRef[ref] {
+			continue
+		}
+		if !force && state.ReviewReqLoadedByRef[ref] {
 			continue
 		}
 		seen[ref] = true
