@@ -2,6 +2,7 @@ package ghpr
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -142,5 +143,64 @@ func TestCIStatusForPRFailsOpenWhenGhFails(t *testing.T) {
 	status := client.CIStatusForPR(context.Background(), "o/r#42")
 	if status != CIStatusUnknown {
 		t.Fatalf("expected unknown status on gh failure, got %q", status)
+	}
+}
+
+func TestStreamTimelineCommittedEventEnrichesActorFromCommit(t *testing.T) {
+	commitCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/o/r/issues/1":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"number":1,"title":"x","body":"","created_at":"2024-01-01T00:00:00Z","user":{"login":"octo","id":1},"pull_request":{"url":"https://api.github.com/repos/o/r/pulls/1"}}`))
+		case "/repos/o/r/pulls/1":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"number":1,"title":"x","body":"","created_at":"2024-01-01T00:00:00Z","state":"open","user":{"login":"octo","id":1}}`))
+		case "/repos/o/r/issues/1/timeline":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[
+				{"id":101,"event":"committed","created_at":"2024-01-01T01:00:00Z","sha":"abc123","html_url":"https://github.com/o/r/commit/abc123"},
+				{"id":102,"event":"committed","created_at":"2024-01-01T01:01:00Z","sha":"abc123","html_url":"https://github.com/o/r/commit/abc123"}
+			]`))
+		case "/repos/o/r/commits/abc123":
+			commitCalls++
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"author":{"login":"alice","id":2}}`))
+		case "/repos/o/r/pulls/1/comments":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[]`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(fmt.Sprintf("unexpected path: %s", r.URL.Path)))
+		}
+	}))
+	defer server.Close()
+
+	client := NewClientWithBaseURL("", server.URL)
+	var events []TimelineEvent
+	err := client.StreamTimeline(context.Background(), "o/r#1", func(event TimelineEvent) error {
+		events = append(events, event)
+		return nil
+	}, nil)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	if commitCalls != 1 {
+		t.Fatalf("expected commit actor lookup to be cached, got %d calls", commitCalls)
+	}
+
+	commitEvents := 0
+	for _, event := range events {
+		if event.Type != "github.timeline.committed" {
+			continue
+		}
+		commitEvents++
+		if event.Actor == nil || event.Actor.Login != "alice" {
+			t.Fatalf("expected committed actor alice, got %+v", event.Actor)
+		}
+	}
+	if commitEvents != 2 {
+		t.Fatalf("expected 2 committed events, got %d", commitEvents)
 	}
 }

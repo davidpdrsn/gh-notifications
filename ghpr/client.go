@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -337,12 +338,36 @@ func ciSuccessState(state string) bool {
 }
 
 func (c *Client) streamPRTimeline(ctx context.Context, owner, repo string, number int, emit func(timelineapi.Event) error, onWarning func(string)) error {
+	commitActorBySHA := make(map[string]*github.User)
 	if err := c.github.StreamTimeline(ctx, owner, repo, number, func(item github.TimelineItem) error {
 		e, warning, ok := timeline.MapTimelineItem(item.Raw)
 		if warning != "" && onWarning != nil {
 			onWarning(warning)
 		}
 		if ok {
+			if e.Type == "github.timeline.committed" && (e.Actor == nil || strings.TrimSpace(e.Actor.Login) == "") {
+				sha := ""
+				if e.Commit != nil && e.Commit.Sha != nil {
+					sha = strings.TrimSpace(*e.Commit.Sha)
+				}
+				if sha != "" {
+					actor, cached := commitActorBySHA[sha]
+					if !cached {
+						resolved, err := c.github.FetchCommitUser(ctx, owner, repo, sha)
+						if err != nil {
+							if onWarning != nil {
+								onWarning(fmt.Sprintf("warning: unable to resolve commit actor for %s: %v", sha, err))
+							}
+						} else {
+							actor = resolved
+						}
+						commitActorBySHA[sha] = actor
+					}
+					if actor != nil && strings.TrimSpace(actor.Login) != "" {
+						e.Actor = &timelineapi.Actor{Login: actor.Login, Id: int(actor.ID)}
+					}
+				}
+			}
 			if timeline.ShouldIgnorePRTimelineEvent(e) {
 				return nil
 			}

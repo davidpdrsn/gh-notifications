@@ -146,3 +146,55 @@ func TestFetchRequestedReviewersUsesPREndpoint(t *testing.T) {
 		t.Fatalf("unexpected reviewers payload: %+v", out.Users)
 	}
 }
+
+func TestFetchCommitUserPrefersAuthor(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Fatalf("expected GET method, got %q", r.Method)
+		}
+		if r.URL.Path != "/repos/o/r/commits/abc123" {
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"author":{"login":"alice","id":1},"committer":{"login":"bot","id":2}}`))
+	}))
+	defer server.Close()
+
+	client := NewClient("", server.URL)
+	user, err := client.FetchCommitUser(context.Background(), "o", "r", "abc123")
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if user == nil {
+		t.Fatalf("expected user to be resolved")
+	}
+	if user.Login != "alice" {
+		t.Fatalf("expected author login alice, got %q", user.Login)
+	}
+}
+
+func TestFetchCommitUserFallsBackToCommitter(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Fatalf("expected GET method, got %q", r.Method)
+		}
+		if r.URL.Path != "/repos/o/r/commits/abc123" {
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"author":null,"committer":{"login":"alice","id":1}}`))
+	}))
+	defer server.Close()
+
+	client := NewClient("", server.URL)
+	user, err := client.FetchCommitUser(context.Background(), "o", "r", "abc123")
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if user == nil {
+		t.Fatalf("expected fallback committer user")
+	}
+	if user.Login != "alice" {
+		t.Fatalf("expected committer login alice, got %q", user.Login)
+	}
+}

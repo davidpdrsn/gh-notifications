@@ -382,6 +382,40 @@ func (c *Client) FetchRequestedReviewers(ctx context.Context, owner, repo string
 	return out, nil
 }
 
+func (c *Client) FetchCommitUser(ctx context.Context, owner, repo, sha string) (*User, error) {
+	owner = strings.TrimSpace(owner)
+	repo = strings.TrimSpace(repo)
+	sha = strings.TrimSpace(sha)
+	if owner == "" || repo == "" || sha == "" {
+		return nil, fmt.Errorf("owner, repo, and sha are required")
+	}
+
+	path := fmt.Sprintf(
+		"/repos/%s/%s/commits/%s",
+		url.PathEscape(owner),
+		url.PathEscape(repo),
+		url.PathEscape(sha),
+	)
+
+	var out struct {
+		Author    *User `json:"author"`
+		Committer *User `json:"committer"`
+	}
+	if err := c.getJSON(ctx, path, &out); err != nil {
+		return nil, err
+	}
+
+	for _, candidate := range []*User{out.Author, out.Committer} {
+		if candidate == nil || strings.TrimSpace(candidate.Login) == "" {
+			continue
+		}
+		user := *candidate
+		return &user, nil
+	}
+
+	return nil, nil
+}
+
 func (c *Client) getJSON(ctx context.Context, path string, out any) error {
 	req, err := c.newRequest(ctx, path)
 	if err != nil {
