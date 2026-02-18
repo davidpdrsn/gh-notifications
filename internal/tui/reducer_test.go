@@ -2786,7 +2786,7 @@ func TestTimelineArrivedLoadsReadStateWhenActorIsNotViewer(t *testing.T) {
 	}
 }
 
-func TestReviewReqStateLoadedAutoMarksReadWhenViewerIsAuthor(t *testing.T) {
+func TestReviewReqStateLoadedDoesNotAutoMarkReadWhenViewerIsAuthor(t *testing.T) {
 	state := NewState()
 	state.ViewerLoaded = true
 	state.ViewerLogin = "alice"
@@ -2812,8 +2812,12 @@ func TestReviewReqStateLoadedAutoMarksReadWhenViewerIsAuthor(t *testing.T) {
 	if next.Notifications[0].author != "alice" {
 		t.Fatalf("expected notification author to be alice, got %q", next.Notifications[0].author)
 	}
-	if !next.ParentReadByRef["o/r#1"] {
-		t.Fatalf("expected viewer-authored notification to be marked read")
+	ts := next.TimelineByRef[state.CurrentRef]
+	if ts.readKnownByEventID["e1"] && ts.readByEventID["e1"] {
+		t.Fatalf("expected existing timeline event to remain unread")
+	}
+	if next.ParentReadByRef["o/r#1"] {
+		t.Fatalf("expected viewer-authored notification not to be auto-marked read")
 	}
 	foundPersist := false
 	for _, eff := range effects {
@@ -2822,8 +2826,8 @@ func TestReviewReqStateLoadedAutoMarksReadWhenViewerIsAuthor(t *testing.T) {
 			break
 		}
 	}
-	if !foundPersist {
-		t.Fatalf("expected PersistReadStateEffect when viewer is notification author")
+	if foundPersist {
+		t.Fatalf("expected no PersistReadStateEffect when viewer is notification author")
 	}
 }
 

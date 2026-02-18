@@ -686,7 +686,6 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 		state.ViewerLogin = ""
 		state.ViewerLoaded = false
 	case ReviewReqStateLoadedEvent:
-		viewer := strings.TrimSpace(state.ViewerLogin)
 		pending := make(map[string]bool, len(e.PendingRefs))
 		for _, ref := range e.PendingRefs {
 			ref = strings.TrimSpace(ref)
@@ -751,18 +750,10 @@ func Reduce(state AppState, ev Event) (AppState, []Effect) {
 				author = fresh
 				state.AuthorByRef[ref] = fresh
 			}
-			var notifForRef *notifRow
 			for i := range state.Notifications {
 				if state.Notifications[i].ref == ref {
 					state.Notifications[i].author = author
-					if notifForRef == nil {
-						n := state.Notifications[i]
-						notifForRef = &n
-					}
 				}
-			}
-			if state.ViewerLoaded && viewer != "" && author != "" && strings.EqualFold(author, viewer) && notifForRef != nil {
-				markNotificationRead(&state, &effects, *notifForRef)
 			}
 			invalidateNotifMarkerCacheForRef(&state, ref)
 		}
