@@ -3,8 +3,12 @@ package cli
 import (
 	"bytes"
 	"context"
+	"net/http"
 	"strings"
 	"testing"
+	"time"
+
+	"gh-pr/internal/github"
 )
 
 func TestRunTimelineWithoutArgsShowsHelpTextOnStderr(t *testing.T) {
@@ -48,5 +52,40 @@ func TestRunNotificationsWithArgsShowsHelpTextOnStderr(t *testing.T) {
 	}
 	if !strings.Contains(errText, "gh-pr notifications") {
 		t.Fatalf("expected usage help in stderr, got %q", errText)
+	}
+}
+
+func TestMapGitHubErrorWithNotFoundIncludesRateLimitDetails(t *testing.T) {
+	retryAfter := 3
+	remaining := 0
+	reset := time.Unix(1710000000, 0).UTC()
+
+	appErr := mapGitHubErrorWithNotFound(&github.APIError{
+		StatusCode:         http.StatusForbidden,
+		Message:            "API rate limit exceeded",
+		RetryAfterSeconds:  &retryAfter,
+		RateLimitRemaining: &remaining,
+		RateLimitReset:     &reset,
+	}, "not found")
+
+	if appErr == nil {
+		t.Fatalf("expected app error")
+	}
+	var typed *AppError
+	if _, ok := appErr.(*AppError); !ok {
+		t.Fatalf("expected *AppError, got %T", appErr)
+	}
+	typed = appErr.(*AppError)
+	if typed.Code != "rate_limit" {
+		t.Fatalf("expected rate_limit code, got %q", typed.Code)
+	}
+	if typed.Details["retry_after_seconds"] != retryAfter {
+		t.Fatalf("expected retry_after_seconds=%d, got %v", retryAfter, typed.Details["retry_after_seconds"])
+	}
+	if typed.Details["rate_limit_remaining"] != remaining {
+		t.Fatalf("expected rate_limit_remaining=%d, got %v", remaining, typed.Details["rate_limit_remaining"])
+	}
+	if typed.Details["rate_limit_reset_at"] != reset.Format(time.RFC3339) {
+		t.Fatalf("unexpected rate_limit_reset_at: %v", typed.Details["rate_limit_reset_at"])
 	}
 }

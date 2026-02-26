@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"gh-pr/internal/github"
 	"gh-pr/internal/notifications"
@@ -107,6 +108,7 @@ func (a *app) timelineCommand(ctx context.Context) *cobra.Command {
 			}
 
 			client := github.NewClient(token, "")
+			a.configureRateLimitRetryHook(client)
 
 			enc := json.NewEncoder(a.stdout)
 			enc.SetEscapeHTML(false)
@@ -299,6 +301,7 @@ func (a *app) notificationsCommand(ctx context.Context) *cobra.Command {
 			}
 
 			client := github.NewClient(token, "")
+			a.configureRateLimitRetryHook(client)
 			enc := json.NewEncoder(a.stdout)
 			enc.SetEscapeHTML(false)
 
@@ -354,15 +357,37 @@ func (a *app) tuiCommand(ctx context.Context) *cobra.Command {
 	return cmd
 }
 
+func (a *app) configureRateLimitRetryHook(client *github.Client) {
+	if client == nil {
+		return
+	}
+	client.SetRateLimitRetryHook(func(apiErr github.APIError, wait time.Duration, attempt int) {
+		kind := "primary"
+		if apiErr.IsSecondaryRateLimit() {
+			kind = "secondary"
+		}
+		_, _ = fmt.Fprintf(a.stderr, "warning: GitHub %s rate limit reached; retrying in %s (attempt %d)\n", kind, wait.Round(time.Second), attempt)
+	})
+}
+
 func mapGitHubErrorWithNotFound(err error, notFoundMessage string) error {
 	var apiErr *github.APIError
 	if errors.As(err, &apiErr) {
 		details := map[string]any{
 			"status_code": apiErr.StatusCode,
 		}
+		if apiErr.RetryAfterSeconds != nil {
+			details["retry_after_seconds"] = *apiErr.RetryAfterSeconds
+		}
+		if apiErr.RateLimitRemaining != nil {
+			details["rate_limit_remaining"] = *apiErr.RateLimitRemaining
+		}
+		if apiErr.RateLimitReset != nil {
+			details["rate_limit_reset_at"] = apiErr.RateLimitReset.Format(time.RFC3339)
+		}
 		switch apiErr.StatusCode {
 		case http.StatusUnauthorized, http.StatusForbidden:
-			if strings.Contains(strings.ToLower(apiErr.Message), "rate limit") {
+			if apiErr.IsRateLimit() {
 				return &AppError{Code: "rate_limit", Message: "GitHub API rate limit reached", ExitCode: ExitRateLimit, Details: details, Cause: err}
 			}
 			return &AppError{Code: "auth_error", Message: "GitHub authentication failed", ExitCode: ExitAuth, Details: details, Cause: err}

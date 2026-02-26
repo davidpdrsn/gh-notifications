@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -103,10 +104,16 @@ type ForcePushInterdiff struct {
 }
 
 type Client struct {
-	httpClient *http.Client
-	baseURL    string
-	token      string
+	httpClient       *http.Client
+	baseURL          string
+	token            string
+	onRateLimitRetry func(APIError, time.Duration, int)
 }
+
+const (
+	maxRateLimitRetries = 3
+	maxBackoffWait      = 30 * time.Second
+)
 
 func NewClient(token string, baseURL string) *Client {
 	if strings.TrimSpace(baseURL) == "" {
@@ -118,6 +125,13 @@ func NewClient(token string, baseURL string) *Client {
 		baseURL:    strings.TrimRight(baseURL, "/"),
 		token:      strings.TrimSpace(token),
 	}
+}
+
+func (c *Client) SetRateLimitRetryHook(hook func(APIError, time.Duration, int)) {
+	if c == nil {
+		return
+	}
+	c.onRateLimitRetry = hook
 }
 
 func (c *Client) FetchPullRequest(ctx context.Context, owner, repo string, number int) (PullRequest, error) {
@@ -154,18 +168,14 @@ func (c *Client) StreamTimeline(ctx context.Context, owner, repo string, number 
 	path := fmt.Sprintf("/repos/%s/%s/issues/%d/timeline?per_page=100", url.PathEscape(owner), url.PathEscape(repo), number)
 
 	for path != "" {
-		req, err := c.newRequest(ctx, path)
+		resp, err := c.doWithRateLimitRetry(ctx, true, func(ctx context.Context) (*http.Response, error) {
+			req, err := c.newRequest(ctx, path)
+			if err != nil {
+				return nil, err
+			}
+			return c.httpClient.Do(req)
+		})
 		if err != nil {
-			return err
-		}
-
-		resp, err := c.httpClient.Do(req)
-		if err != nil {
-			return fmt.Errorf("github request failed: %w", err)
-		}
-
-		if err := checkStatus(resp); err != nil {
-			_ = resp.Body.Close()
 			return err
 		}
 
@@ -208,18 +218,14 @@ func (c *Client) StreamReviewComments(ctx context.Context, owner, repo string, n
 	path := fmt.Sprintf("/repos/%s/%s/pulls/%d/comments?per_page=100", url.PathEscape(owner), url.PathEscape(repo), number)
 
 	for path != "" {
-		req, err := c.newRequest(ctx, path)
+		resp, err := c.doWithRateLimitRetry(ctx, true, func(ctx context.Context) (*http.Response, error) {
+			req, err := c.newRequest(ctx, path)
+			if err != nil {
+				return nil, err
+			}
+			return c.httpClient.Do(req)
+		})
 		if err != nil {
-			return err
-		}
-
-		resp, err := c.httpClient.Do(req)
-		if err != nil {
-			return fmt.Errorf("github request failed: %w", err)
-		}
-
-		if err := checkStatus(resp); err != nil {
-			_ = resp.Body.Close()
 			return err
 		}
 
@@ -249,18 +255,14 @@ func (c *Client) StreamNotifications(ctx context.Context, onItem func(Notificati
 	path := "/notifications?all=true&per_page=100"
 
 	for path != "" {
-		req, err := c.newRequest(ctx, path)
+		resp, err := c.doWithRateLimitRetry(ctx, true, func(ctx context.Context) (*http.Response, error) {
+			req, err := c.newRequest(ctx, path)
+			if err != nil {
+				return nil, err
+			}
+			return c.httpClient.Do(req)
+		})
 		if err != nil {
-			return err
-		}
-
-		resp, err := c.httpClient.Do(req)
-		if err != nil {
-			return fmt.Errorf("github request failed: %w", err)
-		}
-
-		if err := checkStatus(resp); err != nil {
-			_ = resp.Body.Close()
 			return err
 		}
 
@@ -304,17 +306,15 @@ func (c *Client) ArchiveNotificationThread(ctx context.Context, threadID string)
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.doWithRateLimitRetry(ctx, false, func(context.Context) (*http.Response, error) {
+		return c.httpClient.Do(req)
+	})
 	if err != nil {
-		return fmt.Errorf("github request failed: %w", err)
+		return err
 	}
 	defer func() {
 		_ = resp.Body.Close()
 	}()
-
-	if err := checkStatus(resp); err != nil {
-		return err
-	}
 
 	return nil
 }
@@ -336,17 +336,15 @@ func (c *Client) UnsubscribeNotificationThread(ctx context.Context, threadID str
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.doWithRateLimitRetry(ctx, false, func(context.Context) (*http.Response, error) {
+		return c.httpClient.Do(req)
+	})
 	if err != nil {
-		return fmt.Errorf("github request failed: %w", err)
+		return err
 	}
 	defer func() {
 		_ = resp.Body.Close()
 	}()
-
-	if err := checkStatus(resp); err != nil {
-		return err
-	}
 
 	return nil
 }
@@ -417,22 +415,19 @@ func (c *Client) FetchCommitUser(ctx context.Context, owner, repo, sha string) (
 }
 
 func (c *Client) getJSON(ctx context.Context, path string, out any) error {
-	req, err := c.newRequest(ctx, path)
+	resp, err := c.doWithRateLimitRetry(ctx, true, func(ctx context.Context) (*http.Response, error) {
+		req, err := c.newRequest(ctx, path)
+		if err != nil {
+			return nil, err
+		}
+		return c.httpClient.Do(req)
+	})
 	if err != nil {
 		return err
-	}
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("github request failed: %w", err)
 	}
 	defer func() {
 		_ = resp.Body.Close()
 	}()
-
-	if err := checkStatus(resp); err != nil {
-		return err
-	}
 
 	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
 		return fmt.Errorf("failed to decode github response: %w", err)
@@ -442,25 +437,22 @@ func (c *Client) getJSON(ctx context.Context, path string, out any) error {
 }
 
 func (c *Client) getText(ctx context.Context, path string, accept string) (string, error) {
-	req, err := c.newRequest(ctx, path)
+	resp, err := c.doWithRateLimitRetry(ctx, true, func(ctx context.Context) (*http.Response, error) {
+		req, err := c.newRequest(ctx, path)
+		if err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(accept) != "" {
+			req.Header.Set("Accept", accept)
+		}
+		return c.httpClient.Do(req)
+	})
 	if err != nil {
 		return "", err
-	}
-	if strings.TrimSpace(accept) != "" {
-		req.Header.Set("Accept", accept)
-	}
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("github request failed: %w", err)
 	}
 	defer func() {
 		_ = resp.Body.Close()
 	}()
-
-	if err := checkStatus(resp); err != nil {
-		return "", err
-	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -605,28 +597,26 @@ func (c *Client) graphQL(ctx context.Context, query string, variables map[string
 		return fmt.Errorf("failed to encode graphql request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.graphqlEndpointURL(), bytes.NewReader(body))
+	retryable := strings.HasPrefix(strings.TrimSpace(strings.ToLower(query)), "query")
+	resp, err := c.doWithRateLimitRetry(ctx, retryable, func(ctx context.Context) (*http.Response, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.graphqlEndpointURL(), bytes.NewReader(body))
+		if err != nil {
+			return nil, fmt.Errorf("failed to create github graphql request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/vnd.github+json")
+		req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+		if c.token != "" {
+			req.Header.Set("Authorization", "Bearer "+c.token)
+		}
+		return c.httpClient.Do(req)
+	})
 	if err != nil {
-		return fmt.Errorf("failed to create github graphql request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
-	}
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("github request failed: %w", err)
+		return err
 	}
 	defer func() {
 		_ = resp.Body.Close()
 	}()
-
-	if err := checkStatus(resp); err != nil {
-		return err
-	}
 
 	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
 		return fmt.Errorf("failed to decode github graphql response: %w", err)
@@ -694,27 +684,196 @@ func (c *Client) newRequest(ctx context.Context, path string) (*http.Request, er
 	return req, nil
 }
 
+func (c *Client) doWithRateLimitRetry(ctx context.Context, retryable bool, request func(context.Context) (*http.Response, error)) (*http.Response, error) {
+	for attempt := 0; ; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
+		resp, err := request(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("github request failed: %w", err)
+		}
+
+		if err := checkStatus(resp); err != nil {
+			_ = resp.Body.Close()
+			var apiErr *APIError
+			if !errors.As(err, &apiErr) {
+				return nil, err
+			}
+			if !retryable || !apiErr.IsRateLimit() || attempt >= maxRateLimitRetries {
+				return nil, apiErr
+			}
+
+			wait, ok := apiErr.SuggestedWait(time.Now())
+			if !ok || wait <= 0 {
+				wait = time.Duration(1<<attempt) * time.Second
+				if wait > maxBackoffWait {
+					wait = maxBackoffWait
+				}
+			}
+
+			if c.onRateLimitRetry != nil {
+				c.onRateLimitRetry(*apiErr, wait, attempt+1)
+			}
+
+			if err := sleepContext(ctx, wait); err != nil {
+				return nil, err
+			}
+			continue
+		}
+
+		return resp, nil
+	}
+}
+
+func sleepContext(ctx context.Context, wait time.Duration) error {
+	if wait <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
 func checkStatus(resp *http.Response) error {
 	if resp.StatusCode < 400 {
 		return nil
 	}
 
 	body, _ := io.ReadAll(resp.Body)
-	_ = resp.Body.Close()
 	message := strings.TrimSpace(string(body))
+	docURL := ""
+	if len(body) > 0 {
+		var payload struct {
+			Message          string `json:"message"`
+			DocumentationURL string `json:"documentation_url"`
+		}
+		if err := json.Unmarshal(body, &payload); err == nil {
+			if strings.TrimSpace(payload.Message) != "" {
+				message = strings.TrimSpace(payload.Message)
+			}
+			docURL = strings.TrimSpace(payload.DocumentationURL)
+		}
+	}
 	if message == "" {
 		message = http.StatusText(resp.StatusCode)
 	}
 
-	return &APIError{
-		StatusCode: resp.StatusCode,
-		Message:    message,
+	apiErr := &APIError{
+		StatusCode:        resp.StatusCode,
+		Message:           message,
+		DocumentationURL:  docURL,
+		RateLimitResource: strings.TrimSpace(resp.Header.Get("X-RateLimit-Resource")),
 	}
+	if retryAfterWait, retryAfterSeconds, ok := parseRetryAfterHeader(resp.Header.Get("Retry-After"), time.Now()); ok {
+		if retryAfterSeconds != nil {
+			apiErr.RetryAfterSeconds = retryAfterSeconds
+		} else if retryAfterWait > 0 {
+			seconds := int((retryAfterWait + time.Second - 1) / time.Second)
+			if seconds < 1 {
+				seconds = 1
+			}
+			apiErr.RetryAfterSeconds = &seconds
+		}
+	}
+	if remaining, ok := parseIntHeader(resp.Header.Get("X-RateLimit-Remaining")); ok {
+		apiErr.RateLimitRemaining = &remaining
+	}
+	if resetUnix, ok := parseIntHeader(resp.Header.Get("X-RateLimit-Reset")); ok {
+		reset := time.Unix(int64(resetUnix), 0).UTC()
+		apiErr.RateLimitReset = &reset
+	}
+	return apiErr
+}
+
+func parseRetryAfterHeader(raw string, now time.Time) (time.Duration, *int, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, nil, false
+	}
+	if seconds, ok := parseIntHeader(raw); ok {
+		return time.Duration(seconds) * time.Second, &seconds, true
+	}
+	t, err := http.ParseTime(raw)
+	if err != nil {
+		return 0, nil, false
+	}
+	wait := t.Sub(now)
+	if wait <= 0 {
+		return 0, nil, true
+	}
+	return wait, nil, true
+}
+
+func parseIntHeader(raw string) (int, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, false
+	}
+	v, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, false
+	}
+	return v, true
 }
 
 type APIError struct {
-	StatusCode int
-	Message    string
+	StatusCode         int
+	Message            string
+	DocumentationURL   string
+	RetryAfterSeconds  *int
+	RateLimitRemaining *int
+	RateLimitReset     *time.Time
+	RateLimitResource  string
+}
+
+func (e *APIError) IsRateLimit() bool {
+	if e == nil {
+		return false
+	}
+	if e.StatusCode == http.StatusTooManyRequests {
+		return true
+	}
+	if e.StatusCode != http.StatusForbidden && e.StatusCode != http.StatusUnauthorized {
+		return false
+	}
+	msg := strings.ToLower(strings.TrimSpace(e.Message))
+	if strings.Contains(msg, "rate limit") {
+		return true
+	}
+	if e.RetryAfterSeconds != nil {
+		return true
+	}
+	return e.RateLimitRemaining != nil && *e.RateLimitRemaining == 0
+}
+
+func (e *APIError) IsSecondaryRateLimit() bool {
+	if e == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(strings.TrimSpace(e.Message)), "secondary rate limit")
+}
+
+func (e *APIError) SuggestedWait(now time.Time) (time.Duration, bool) {
+	if e == nil {
+		return 0, false
+	}
+	if e.RetryAfterSeconds != nil && *e.RetryAfterSeconds > 0 {
+		return time.Duration(*e.RetryAfterSeconds) * time.Second, true
+	}
+	if e.RateLimitReset != nil {
+		wait := e.RateLimitReset.Sub(now)
+		if wait > 0 {
+			return wait, true
+		}
+	}
+	return 0, false
 }
 
 func (e *APIError) Error() string {

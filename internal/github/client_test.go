@@ -2,9 +2,12 @@ package github
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
+	"time"
 )
 
 func TestStreamNotificationsRequestsAllNotifications(t *testing.T) {
@@ -196,5 +199,157 @@ func TestFetchCommitUserFallsBackToCommitter(t *testing.T) {
 	}
 	if user.Login != "alice" {
 		t.Fatalf("expected committer login alice, got %q", user.Login)
+	}
+}
+
+func TestFetchViewerRetriesOnRateLimitRetryAfter(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts == 1 {
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Retry-After", "0")
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte(`{"message":"API rate limit exceeded"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"login":"alice","id":1}`))
+	}))
+	defer server.Close()
+
+	client := NewClient("", server.URL)
+	_, err := client.FetchViewer(context.Background())
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("expected 2 attempts, got %d", attempts)
+	}
+}
+
+func TestFetchViewerRetriesOnRateLimitResetHeader(t *testing.T) {
+	attempts := 0
+	reset := time.Now().Add(50 * time.Millisecond).Unix()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts == 1 {
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("X-RateLimit-Remaining", "0")
+			w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(reset, 10))
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"message":"API rate limit exceeded"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"login":"alice","id":1}`))
+	}))
+	defer server.Close()
+
+	client := NewClient("", server.URL)
+	_, err := client.FetchViewer(context.Background())
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("expected 2 attempts, got %d", attempts)
+	}
+}
+
+func TestFetchViewerDoesNotRetryForbiddenWithoutRateLimitSignal(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"message":"forbidden"}`))
+	}))
+	defer server.Close()
+
+	client := NewClient("", server.URL)
+	_, err := client.FetchViewer(context.Background())
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected APIError, got %T", err)
+	}
+	if attempts != 1 {
+		t.Fatalf("expected 1 attempt, got %d", attempts)
+	}
+}
+
+func TestFetchViewerRateLimitWaitRespectsContextCancel(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Retry-After", "1")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"message":"API rate limit exceeded"}`))
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+
+	client := NewClient("", server.URL)
+	_, err := client.FetchViewer(ctx)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected context deadline exceeded, got %v", err)
+	}
+	if attempts != 1 {
+		t.Fatalf("expected 1 attempt, got %d", attempts)
+	}
+}
+
+func TestFetchViewerRateLimitResetWaitIsNotCapped(t *testing.T) {
+	attempts := 0
+	reset := time.Now().Add(2 * time.Minute).Unix()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-RateLimit-Remaining", "0")
+		w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(reset, 10))
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"message":"API rate limit exceeded"}`))
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+
+	client := NewClient("", server.URL)
+	var waitSeen time.Duration
+	client.SetRateLimitRetryHook(func(_ APIError, wait time.Duration, _ int) {
+		waitSeen = wait
+	})
+
+	_, err := client.FetchViewer(ctx)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected context deadline exceeded, got %v", err)
+	}
+	if attempts != 1 {
+		t.Fatalf("expected 1 attempt, got %d", attempts)
+	}
+	if waitSeen < 90*time.Second {
+		t.Fatalf("expected reset-based wait to be uncapped, got %s", waitSeen)
+	}
+}
+
+func TestParseRetryAfterHeaderSupportsHTTPDate(t *testing.T) {
+	now := time.Now().UTC()
+	raw := now.Add(2 * time.Second).Format(http.TimeFormat)
+
+	wait, seconds, ok := parseRetryAfterHeader(raw, now)
+	if !ok {
+		t.Fatalf("expected header to parse")
+	}
+	if seconds != nil {
+		t.Fatalf("expected nil seconds for HTTP-date retry-after, got %v", *seconds)
+	}
+	if wait <= 0 {
+		t.Fatalf("expected positive wait, got %s", wait)
 	}
 }
