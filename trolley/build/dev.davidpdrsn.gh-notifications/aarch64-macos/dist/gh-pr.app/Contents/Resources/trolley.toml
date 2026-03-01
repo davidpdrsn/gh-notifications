@@ -1,0 +1,32 @@
+[app]
+identifier = "dev.davidpdrsn.gh-notifications"
+display_name = "gh-pr"
+slug = "gh-notifications"
+version = "0.1.0"
+
+[linux.binaries]
+x86_64 = "bin/gh-pr-linux-amd64"
+aarch64 = "bin/gh-pr-linux-arm64"
+
+[macos.binaries]
+x86_64 = "bin/gh-pr-tui-darwin-amd64"
+aarch64 = "bin/gh-pr-tui-darwin-arm64"
+
+[windows.binaries]
+x86_64 = "bin/gh-pr-windows-amd64.exe"
+aarch64 = "bin/gh-pr-windows-arm64.exe"
+
+# Fonts are loaded in order — first match per codepoint wins.
+# Use nerdfont to auto-download from Nerd Fonts GitHub releases.
+# Use path to bundle a local .ttf/.otf file.
+# [fonts]
+# families = [
+#     { nerdfont = "Inconsolata" },
+#     { path = "fonts/MyCustomFont-Regular.ttf" },
+# ]
+
+# Environment variables injected into the TUI process.
+# LANG=C.UTF-8 and LC_ALL=C.UTF-8 are always set by default.
+[environment]
+variables = { PATH = "/Users/davidpdrsn/.nix-profile/bin:/etc/profiles/per-user/davidpdrsn/bin:/run/current-system/sw/bin:/nix/var/nix/profiles/default/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin" }
+
