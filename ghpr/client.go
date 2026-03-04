@@ -337,6 +337,21 @@ func ciSuccessState(state string) bool {
 	}
 }
 
+func compactWarningText(s string, maxRunes int) string {
+	s = strings.Join(strings.Fields(strings.TrimSpace(s)), " ")
+	if maxRunes <= 0 || s == "" {
+		return ""
+	}
+	runes := []rune(s)
+	if len(runes) <= maxRunes {
+		return s
+	}
+	if maxRunes <= 3 {
+		return strings.Repeat(".", maxRunes)
+	}
+	return strings.TrimSpace(string(runes[:maxRunes-3])) + "..."
+}
+
 func (c *Client) streamPRTimeline(ctx context.Context, owner, repo string, number int, emit func(timelineapi.Event) error, onWarning func(string)) error {
 	commitActorBySHA := make(map[string]*github.User)
 	if err := c.github.StreamTimeline(ctx, owner, repo, number, func(item github.TimelineItem) error {
@@ -356,7 +371,7 @@ func (c *Client) streamPRTimeline(ctx context.Context, owner, repo string, numbe
 						resolved, err := c.github.FetchCommitUser(ctx, owner, repo, sha)
 						if err != nil {
 							if onWarning != nil {
-								onWarning(fmt.Sprintf("warning: unable to resolve commit actor for %s: %v", sha, err))
+								onWarning(fmt.Sprintf("warning: unable to resolve commit actor for %s: %s", sha, compactWarningText(err.Error(), 240)))
 							}
 						} else {
 							actor = resolved

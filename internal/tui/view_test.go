@@ -212,6 +212,23 @@ func TestBottomBarShowsConfirmPromptWhenNotificationsPaneHidden(t *testing.T) {
 	}
 }
 
+func TestBottomStatusCompactsMultilineWarnings(t *testing.T) {
+	m := newModel(context.Background(), nil, nil)
+	m.state.Width = 1000
+	m.state.Status = "warning: first line\nsecond\tline " + strings.Repeat("x", 500)
+
+	status := m.bottomStatus()
+	if strings.Contains(status, "\n") || strings.Contains(status, "\t") {
+		t.Fatalf("expected single-line compact status, got %q", status)
+	}
+	if strings.Contains(strings.ToLower(status), "doctype") {
+		t.Fatalf("did not expect raw html payload markers in status: %q", status)
+	}
+	if strings.Count(status, "x") > 260 {
+		t.Fatalf("expected long status text to be compacted, got %q", status)
+	}
+}
+
 func TestViewShowsHelpPopup(t *testing.T) {
 	m := newModel(context.Background(), nil, nil)
 	m.state.Width = 100

@@ -747,7 +747,7 @@ func checkStatus(resp *http.Response) error {
 	}
 
 	body, _ := io.ReadAll(resp.Body)
-	message := strings.TrimSpace(string(body))
+	message := ""
 	docURL := ""
 	if len(body) > 0 {
 		var payload struct {
@@ -755,9 +755,7 @@ func checkStatus(resp *http.Response) error {
 			DocumentationURL string `json:"documentation_url"`
 		}
 		if err := json.Unmarshal(body, &payload); err == nil {
-			if strings.TrimSpace(payload.Message) != "" {
-				message = strings.TrimSpace(payload.Message)
-			}
+			message = strings.TrimSpace(payload.Message)
 			docURL = strings.TrimSpace(payload.DocumentationURL)
 		}
 	}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -202,5 +203,57 @@ func TestStreamTimelineCommittedEventEnrichesActorFromCommit(t *testing.T) {
 	}
 	if commitEvents != 2 {
 		t.Fatalf("expected 2 committed events, got %d", commitEvents)
+	}
+}
+
+func TestStreamTimelineCommitActorWarningOmitsHTMLErrorBody(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/o/r/issues/1":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"number":1,"title":"x","body":"","created_at":"2024-01-01T00:00:00Z","user":{"login":"octo","id":1},"pull_request":{"url":"https://api.github.com/repos/o/r/pulls/1"}}`))
+		case "/repos/o/r/pulls/1":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"number":1,"title":"x","body":"","created_at":"2024-01-01T00:00:00Z","state":"open","user":{"login":"octo","id":1}}`))
+		case "/repos/o/r/issues/1/timeline":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[
+				{"id":101,"event":"committed","created_at":"2024-01-01T01:00:00Z","sha":"abc123","html_url":"https://github.com/o/r/commit/abc123"}
+			]`))
+		case "/repos/o/r/commits/abc123":
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusBadGateway)
+			_, _ = w.Write([]byte("<!DOCTYPE html><html><body>boom</body></html>"))
+		case "/repos/o/r/pulls/1/comments":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[]`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(fmt.Sprintf("unexpected path: %s", r.URL.Path)))
+		}
+	}))
+	defer server.Close()
+
+	client := NewClientWithBaseURL("", server.URL)
+	warnings := make([]string, 0, 1)
+	err := client.StreamTimeline(context.Background(), "o/r#1", func(event TimelineEvent) error {
+		return nil
+	}, func(w string) {
+		warnings = append(warnings, w)
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if len(warnings) != 1 {
+		t.Fatalf("expected 1 warning, got %d", len(warnings))
+	}
+	if strings.Contains(strings.ToLower(warnings[0]), "doctype") || strings.Contains(strings.ToLower(warnings[0]), "<html") {
+		t.Fatalf("expected compact warning without html payload, got %q", warnings[0])
+	}
+	if !strings.Contains(warnings[0], "status=502") || !strings.Contains(warnings[0], "Bad Gateway") {
+		t.Fatalf("expected status and concise message in warning, got %q", warnings[0])
+	}
+	if strings.Contains(warnings[0], "\n") {
+		t.Fatalf("expected warning to be single-line, got %q", warnings[0])
 	}
 }

@@ -1083,6 +1083,21 @@ func oneLine(s string) string {
 	return s
 }
 
+func compactSingleLine(s string, maxRunes int) string {
+	s = strings.Join(strings.Fields(oneLine(s)), " ")
+	if maxRunes <= 0 || s == "" {
+		return ""
+	}
+	runes := []rune(s)
+	if len(runes) <= maxRunes {
+		return s
+	}
+	if maxRunes <= 3 {
+		return strings.Repeat(".", maxRunes)
+	}
+	return strings.TrimSpace(string(runes[:maxRunes-3])) + "..."
+}
+
 func compactThreadPath(path string) string {
 	path = oneLine(path)
 	if path == "" {

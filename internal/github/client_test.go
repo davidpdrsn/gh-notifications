@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -351,5 +352,58 @@ func TestParseRetryAfterHeaderSupportsHTTPDate(t *testing.T) {
 	}
 	if wait <= 0 {
 		t.Fatalf("expected positive wait, got %s", wait)
+	}
+}
+
+func TestFetchCommitUserHTMLErrorFallsBackToHTTPStatusText(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/o/r/commits/abc123" {
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte("<!DOCTYPE html><html><body>gateway exploded</body></html>"))
+	}))
+	defer server.Close()
+
+	client := NewClient("", server.URL)
+	_, err := client.FetchCommitUser(context.Background(), "o", "r", "abc123")
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected APIError, got %T", err)
+	}
+	if apiErr.Message != http.StatusText(http.StatusBadGateway) {
+		t.Fatalf("expected message %q, got %q", http.StatusText(http.StatusBadGateway), apiErr.Message)
+	}
+	if strings.Contains(strings.ToLower(apiErr.Message), "doctype") || strings.Contains(strings.ToLower(apiErr.Message), "html") {
+		t.Fatalf("expected html body to be omitted from message, got %q", apiErr.Message)
+	}
+}
+
+func TestFetchViewerJSONErrorStillUsesAPIMessage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/user" {
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"message":"forbidden by policy"}`))
+	}))
+	defer server.Close()
+
+	client := NewClient("", server.URL)
+	_, err := client.FetchViewer(context.Background())
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected APIError, got %T", err)
+	}
+	if apiErr.Message != "forbidden by policy" {
+		t.Fatalf("expected API message to be preserved, got %q", apiErr.Message)
 	}
 }

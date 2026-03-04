@@ -208,8 +208,8 @@ func waitForAsyncMsg(ch <-chan tea.Msg) tea.Cmd {
 
 func (m *model) bottomStatus() string {
 	parts := make([]string, 0, 3)
-	if strings.TrimSpace(m.state.Status) != "" {
-		parts = append(parts, m.state.Status)
+	if compact := compactSingleLine(m.state.Status, 240); compact != "" {
+		parts = append(parts, compact)
 	}
 	if m.state.ConfirmIntent != nil && !m.confirmIntentVisibleInNotificationsPane() {
 		targets := confirmIntentTargetSet(m.state.ConfirmIntent)
